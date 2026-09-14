@@ -1,0 +1,70 @@
+name: Bug report
+description: A purifier or the plugin itself is not behaving as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the [README](https://github.com/sunnierseattle/homebridge-coway-iocare#readme) first. Login failures are usually covered under **Account requirements and limits**.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: "1.2.0"
+    validations:
+      required: true
+  - type: input
+    id: homebridge-version
+    attributes:
+      label: Homebridge version
+      placeholder: "1.8.5 or 2.0.0"
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: "22.12.0"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Purifier model
+      description: The Homebridge log shows it when the purifier is added, e.g. `Added Bedroom (AP-2015E)`.
+      placeholder: "Airmega 400S (AP-2015E)"
+    validations:
+      required: true
+  - type: dropdown
+    id: region
+    attributes:
+      label: Region
+      options:
+        - US
+        - UK
+        - EU
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Homebridge log
+      description: |
+        Turn on **Homebridge Debug Mode** (Homebridge UI → Settings), restart, reproduce the problem, and paste the relevant lines.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Plugin config
+      description: Your platform block from config.json. **Remove your username and password first.**
+      render: json
