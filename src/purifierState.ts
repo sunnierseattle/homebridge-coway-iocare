@@ -55,11 +55,98 @@ function get(obj: unknown, ...path: string[]): any {
   return cur;
 }
 
+/** Depth-first search for the first plain object that owns `key`. */
+function findOwner(obj: unknown, key: string, depth = 0): Record<string, never> | undefined {
+  if (obj === null || typeof obj !== 'object' || depth > 40) {
+    return undefined;
+  }
+  if (!Array.isArray(obj) && key in obj) {
+    return obj as Record<string, never>;
+  }
+  for (const child of Object.values(obj)) {
+    const hit = findOwner(child, key, depth + 1);
+    if (hit) {
+      return hit;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Next.js App Router pages stream their data as a React Server Components
+ * "flight" payload, split across `self.__next_f.push([1, "..."])` scripts.
+ * Joined, the stream is a sequence of `<id>:<row>` rows. Most rows end at a
+ * newline, but text rows (`<id>:T<hex byte length>,<text>`) carry no
+ * terminator: their length prefix is the only boundary. Splitting the stream on
+ * newlines therefore glues a text row (Coway's embeds the access token) onto
+ * the row after it. Returns the rows in order, text rows omitted.
+ */
+function flightRows(scripts: string[]): string[] {
+  const chunks: string[] = [];
+  for (const script of scripts) {
+    const match = /^\s*self\.__next_f\.push\(([\s\S]*)\)\s*;?\s*$/.exec(script);
+    if (!match) {
+      continue;
+    }
+    try {
+      const [kind, data] = JSON.parse(match[1]) as [number, unknown];
+      if (kind === 1 && typeof data === 'string') {
+        chunks.push(data);
+      }
+    } catch {
+      // Not a data chunk (bootstrap or form-state push); nothing to read.
+    }
+  }
+
+  // Text-row lengths count UTF-8 bytes, so walk bytes rather than characters.
+  const stream = Buffer.from(chunks.join(''), 'utf8');
+  const rows: string[] = [];
+  let i = 0;
+  while (i < stream.length) {
+    const colon = stream.indexOf(':', i);
+    if (colon < 0) {
+      break;
+    }
+    if (stream[colon + 1] === 0x54 /* T */) {
+      const comma = stream.indexOf(',', colon);
+      const length = parseInt(stream.toString('utf8', colon + 2, comma), 16);
+      if (comma < 0 || Number.isNaN(length)) {
+        break;
+      }
+      i = comma + 1 + length;
+      continue;
+    }
+    const newline = stream.indexOf('\n', colon);
+    const end = newline < 0 ? stream.length : newline;
+    rows.push(stream.toString('utf8', colon + 1, end));
+    i = end + 1;
+  }
+  return rows;
+}
+
+/**
+ * Before Coway moved the webview to streamed rendering, the payload sat whole in
+ * one script tag: slice out its outermost JSON object and strip the escaping.
+ */
+function legacyPayload(scripts: string[]): string | undefined {
+  const carrier = scripts.find((s) => s.includes('sensorInfo'));
+  if (!carrier) {
+    return undefined;
+  }
+  const start = carrier.indexOf('{');
+  const end = carrier.lastIndexOf('}');
+  if (start < 0 || end <= start) {
+    throw new CowayError('Status payload script contained no JSON object.');
+  }
+  return carrier.slice(start, end + 1).replace(/\\/g, '');
+}
+
 /**
  * Coway exposes no JSON status endpoint. The IoCare app renders device state in
  * a webview, and the only machine-readable copy is the Next.js payload embedded
- * in that page's script tags. We locate the one script carrying `sensorInfo`,
- * slice out its outermost JSON object and strip the escaping the framework adds.
+ * in that page's script tags. Current pages stream it as RSC flight rows; older
+ * ones embedded it in a single script. Either way we find the JSON carrying
+ * `sensorInfo` and, within it, the device object that owns `coreData`.
  *
  * This is inherently brittle: a Coway front-end change can break it. It fails
  * loudly for that reason — a silent empty state would look like a purifier that
@@ -67,34 +154,26 @@ function get(obj: unknown, ...path: string[]): any {
  */
 export function extractStatusPayload(html: string): StatusPayload {
   const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
-  const carrier = scripts.find((s) => s.includes('sensorInfo'));
-  if (!carrier) {
+  const json = flightRows(scripts).find((row) => row.includes('sensorInfo'))
+    ?? legacyPayload(scripts);
+  if (!json) {
     throw new CowayError(
       'No status payload found in the IoCare page. The session may have expired, or Coway changed the page format.',
     );
   }
 
-  const start = carrier.indexOf('{');
-  const end = carrier.lastIndexOf('}');
-  if (start < 0 || end <= start) {
-    throw new CowayError('Status payload script contained no JSON object.');
-  }
-
-  let parsed: { children?: unknown[] };
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(carrier.slice(start, end + 1).replace(/\\/g, ''));
+    parsed = JSON.parse(json);
   } catch (cause) {
     throw new CowayError(`Could not parse the IoCare status payload: ${(cause as Error).message}`);
   }
 
-  const info = (parsed.children ?? []).find(
-    (child): child is Record<string, never> => typeof child === 'object' && child !== null,
-  );
-  if (!info) {
+  const node = findOwner(parsed, 'coreData');
+  if (!node) {
     throw new CowayError('Status payload contained no device object.');
   }
 
-  const node = info as Record<string, never>;
   const core: unknown[] = get(node, 'coreData') ?? [];
   const sensorHolder = core
     .map((entry) => get(entry as Record<string, never>, 'data'))
