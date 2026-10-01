@@ -47,6 +47,68 @@ describe('extractStatusPayload', () => {
   });
 });
 
+describe('extractStatusPayload — streamed (RSC flight) pages', () => {
+  // The shape Coway has served since September 2026: the device object sits
+  // deep in a React element tree, in one row of a flight stream.
+  const device = {
+    coreData: [
+      { data: { weather: {} } },
+      { data: { sensorInfo: { requestId: '', attributes: { '0007': 890, '0011': 73, '0012': 58 } } } },
+    ],
+    deviceStatusData: { data: { statusInfo: { attributes: { '0001': 1, '0002': 2, '0003': 0, '0007': 2 } } } },
+    deviceModule: {
+      data: { content: { deviceModuleDetailInfo: { wifiConnected: true, airStatusInfo: { iaqGrade: 1 } } } },
+    },
+  };
+  const deviceRow = JSON.stringify(['$', 'div', null, { children: [null, 'x', false, device] }]);
+  // Real pages carry other JSON rows around the device row, so no single
+  // brace-delimited slice of the stream is valid JSON.
+  const before = '0:{"P":null,"b":"build-id"}\n1:"$Sreact.fragment"\n';
+  const after = '8:[["$","meta","0",{"name":"viewport"}]]\n';
+
+  /** Emit a flight stream as Next.js does: rows concatenated, then cut into push() scripts. */
+  const page = (stream: string, cuts: number[] = []) => {
+    const bounds = [0, ...cuts, stream.length];
+    const pushes = bounds.slice(1).map((end, i) =>
+      `<script>self.__next_f.push(${JSON.stringify([1, stream.slice(bounds[i], end)])})</script>`);
+    return `<html><script>(self.__next_f=self.__next_f||[]).push([0])</script>${pushes.join('')}</html>`;
+  };
+
+  /** A text row: length-prefixed in UTF-8 bytes, with no trailing newline. */
+  const textRow = (id: string, text: string) =>
+    `${id}:T${Buffer.byteLength(text, 'utf8').toString(16)},${text}`;
+
+  it('reads the device row out of a flight stream', () => {
+    const out = extractStatusPayload(page(`${before}7:${deviceRow}\n${after}`));
+    expect(out.status).toEqual({ '0001': 1, '0002': 2, '0003': 0, '0007': 2 });
+    expect(out.sensor).toEqual({ '0007': 890, '0011': 73, '0012': 58 });
+    expect(out.network.wifiConnected).toBe(true);
+    expect(out.iaqGrade).toBe(1);
+  });
+
+  it('steps over a text row by its length, since it ends without a newline', () => {
+    // Coway embeds the access token as a text row directly before other rows.
+    // Splitting on newlines would glue the two together and break JSON parsing.
+    const stream = `${before}${textRow('22', 'eyJhbGciOi.token.sig')}7:${deviceRow}\n${after}`;
+    expect(extractStatusPayload(page(stream)).status['0001']).toBe(1);
+  });
+
+  it('measures text rows in bytes, not characters', () => {
+    const stream = `${before}${textRow('22', 'Température °C — 청정기')}7:${deviceRow}\n${after}`;
+    expect(extractStatusPayload(page(stream)).iaqGrade).toBe(1);
+  });
+
+  it('reassembles rows that span several push() chunks', () => {
+    const stream = `${before}7:${deviceRow}\n${after}`;
+    const out = extractStatusPayload(page(stream, [5, 40, 120]));
+    expect(out.sensor['0011']).toBe(73);
+  });
+
+  it('fails loudly when the device row is not valid JSON', () => {
+    expect(() => extractStatusPayload(page('7:{"sensorInfo": oops}\n'))).toThrow(/parse/i);
+  });
+});
+
 describe('parsePurifierState', () => {
   const base = {
     status: { '0001': 1, '0002': 2, '0003': 0, '0007': 0, '0024': 1 },
