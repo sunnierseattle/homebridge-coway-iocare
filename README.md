@@ -104,7 +104,8 @@ Coway's hardware and HomeKit's model do not line up exactly. Where they diverge:
   Selecting a mode behaves the same way.
 - **Modes.** HomeKit's `TargetAirPurifierState` offers only AUTO and MANUAL.
   Coway's *auto* and *eco* both report as AUTO; *night* and *rapid* report as
-  MANUAL. Enable `exposeModeSwitches` to select them directly.
+  MANUAL. Enable `exposeModeSwitches` to select them directly. Night mode
+  reports no fan speed, so it shows as the lowest step (33%).
 - **Air quality.** Coway grades 1–4; HomeKit uses 1–5. The mapping skips
   HomeKit's GOOD so Coway's worst grade still reaches POOR.
 - **Filter life.** Coway reports consumption, HomeKit wants life remaining, so

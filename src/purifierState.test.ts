@@ -128,6 +128,14 @@ describe('parsePurifierState', () => {
     expect(s.buttonLock).toBe(true);
   });
 
+  it('reports night mode as the lowest fan step, not as speed 0', () => {
+    // Coway reports fan 0 in night mode; 0% would read as "on but not running".
+    expect(parsePurifierState(base).fanSpeed).toBe(1);
+    // Off stays 0, and a real speed in another mode passes through.
+    expect(parsePurifierState({ ...base, status: { ...base.status, '0001': 0 } }).fanSpeed).toBe(0);
+    expect(parsePurifierState({ ...base, status: { ...base.status, '0002': 0, '0003': 3 } }).fanSpeed).toBe(3);
+  });
+
   it('treats eco as an automatic mode, since HomeKit has only auto/manual', () => {
     expect(parsePurifierState({ ...base, status: { ...base.status, '0002': 6 } }).autoMode).toBe(true);
     expect(parsePurifierState({ ...base, status: { ...base.status, '0002': 1 } }).autoMode).toBe(true);

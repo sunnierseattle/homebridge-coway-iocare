@@ -65,8 +65,9 @@ export class AirmegaAccessory {
         return v === 1
           ? this.sendAll(commandsFor.mode(isOn, Mode.AUTO))
           // Leaving auto has no direct command; selecting a speed is what puts
-          // the unit into manual, so re-assert the current one.
-          : this.sendAll(commandsFor.speed(isOn, toRotationSpeed(this.state?.fanSpeed ?? 1)));
+          // the unit into manual, so re-assert the current one. A reported speed
+          // of 0 must not pass through: speed 0 means power off.
+          : this.sendAll(commandsFor.speed(isOn, toRotationSpeed(this.state?.fanSpeed || 1)));
       });
 
     this.purifier.getCharacteristic(Characteristic.RotationSpeed)
@@ -136,6 +137,11 @@ export class AirmegaAccessory {
     }
     if (attribute === Attr.FAN_SPEED) {
       this.state.fanSpeed = Number(value);
+      // A speed command takes the unit out of whichever mode it was in.
+      this.state.autoMode = false;
+      this.state.nightMode = false;
+      this.state.rapidMode = false;
+      this.state.ecoMode = false;
     }
     if (attribute === Attr.LIGHT) {
       this.state.lightRaw = Number(value);
