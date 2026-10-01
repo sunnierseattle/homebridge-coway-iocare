@@ -29,7 +29,8 @@ export interface PurifierState {
   fanSpeed: number;
   /** Raw attribute 0007. Its meaning depends on the model's convention. */
   lightRaw?: number;
-  buttonLock: boolean;
+  /** Undefined on models that accept a lock command but never report it (400S). */
+  buttonLock?: boolean;
   online: boolean;
   /** Percent of filter life remaining, or undefined when unreported. */
   preFilterPct?: number;
@@ -235,7 +236,7 @@ export function parsePurifierState(
     fanSpeed: (status[Attr.FAN_SPEED] ?? 0)
       || (status[Attr.POWER] === 1 && String(mode) === Mode.NIGHT ? 1 : 0),
     lightRaw: status[Attr.LIGHT],
-    buttonLock: status[Attr.LOCK] === 1,
+    buttonLock: status[Attr.LOCK] === undefined ? undefined : status[Attr.LOCK] === 1,
     online: network.wifiConnected !== false,
     ...filterLife(filters, sensor),
     aqGrade: iaqGrade,

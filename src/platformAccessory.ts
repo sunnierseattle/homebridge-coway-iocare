@@ -76,7 +76,7 @@ export class AirmegaAccessory {
       .onSet((v) => this.sendAll(commandsFor.speed(this.state?.isOn ?? false, Number(v))));
 
     this.purifier.getCharacteristic(Characteristic.LockPhysicalControls)
-      .onGet(() => this.read((s) => (s.buttonLock ? 1 : 0), 0))
+      .onGet(() => this.read((s) => (s.buttonLock ? 1 : 0), this.accessory.context.buttonLock ? 1 : 0))
       .onSet((v) => this.send(Attr.LOCK, v ? '1' : '0'));
 
     this.airQuality = this.accessory.getService(Service.AirQualitySensor)
@@ -148,6 +148,8 @@ export class AirmegaAccessory {
     }
     if (attribute === Attr.LOCK) {
       this.state.buttonLock = value === '1';
+      // Kept on the cached accessory for models that never report the lock.
+      this.accessory.context.buttonLock = this.state.buttonLock;
     }
     if (attribute === Attr.MODE) {
       this.state.autoMode = value === Mode.AUTO || value === Mode.ECO;
@@ -161,6 +163,9 @@ export class AirmegaAccessory {
     const { Characteristic } = this.platform;
     try {
       const s = await this.client.readState(this.device);
+      // Some models (the 400S) obey a lock command but never report lock state.
+      // Hold the last value set, or the toggle snaps back to unlocked every poll.
+      s.buttonLock ??= this.accessory.context.buttonLock ?? false;
       this.state = s;
 
       // A value only the enum convention can produce settles the ambiguity.
