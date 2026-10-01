@@ -136,6 +136,14 @@ describe('parsePurifierState', () => {
     expect(parsePurifierState({ ...base, status: { ...base.status, '0002': 0, '0003': 3 } }).fanSpeed).toBe(3);
   });
 
+  it('leaves the lock undefined when the model does not report it', () => {
+    // The 400S accepts 0024 but never includes it in its status.
+    const status: Record<string, number> = { ...base.status };
+    delete status['0024'];
+    expect(parsePurifierState({ ...base, status }).buttonLock).toBeUndefined();
+    expect(parsePurifierState({ ...base, status: { ...status, '0024': 0 } }).buttonLock).toBe(false);
+  });
+
   it('treats eco as an automatic mode, since HomeKit has only auto/manual', () => {
     expect(parsePurifierState({ ...base, status: { ...base.status, '0002': 6 } }).autoMode).toBe(true);
     expect(parsePurifierState({ ...base, status: { ...base.status, '0002': 1 } }).autoMode).toBe(true);
