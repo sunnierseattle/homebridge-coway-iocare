@@ -230,7 +230,10 @@ export function parsePurifierState(
     nightMode: String(mode) === Mode.NIGHT,
     rapidMode: String(mode) === Mode.RAPID,
     ecoMode: String(mode) === Mode.ECO,
-    fanSpeed: status[Attr.FAN_SPEED] ?? 0,
+    // Night mode runs the fan at its quietest but reports speed 0, which HomeKit
+    // would show as "on at 0%". Report it as the lowest step instead.
+    fanSpeed: (status[Attr.FAN_SPEED] ?? 0)
+      || (status[Attr.POWER] === 1 && String(mode) === Mode.NIGHT ? 1 : 0),
     lightRaw: status[Attr.LIGHT],
     buttonLock: status[Attr.LOCK] === 1,
     online: network.wifiConnected !== false,
