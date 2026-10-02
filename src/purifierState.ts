@@ -11,6 +11,24 @@ export interface StatusPayload {
   iaqGrade?: number;
   /** The MCU firmware version as Coway words it, e.g. "V1.0.0.2". */
   firmware?: string;
+  /** Coway's marketing name, e.g. "Airmega 400S". */
+  productName?: string;
+  /** The values each control attribute accepts, as the device declares them. */
+  controls?: Record<string, ControlSetting[]>;
+}
+
+export interface ControlSetting {
+  value: number;
+  name: string;
+}
+
+export type ModeSwitchKey = 'night' | 'rapid' | 'eco';
+
+/** What the device says about itself; each field is undefined when it does not say. */
+export interface DeviceCapabilities {
+  productName?: string;
+  modes?: ModeSwitchKey[];
+  light?: LightConvention;
 }
 
 /** How a model encodes attribute 0007. See LIGHT_CONVENTIONS below. */
@@ -42,6 +60,7 @@ export interface PurifierState {
   aqGrade?: number;
   /** Firmware in HomeKit's dotted-number form, or undefined when unknown. */
   firmware?: string;
+  capabilities: DeviceCapabilities;
   pm10?: number;
   pm25?: number;
   lux?: number;
@@ -185,6 +204,14 @@ export function extractStatusPayload(html: string): StatusPayload {
     .find((data) => data && typeof data === 'object' && 'sensorInfo' in (data as object));
 
   const detail = get(node, 'deviceModule', 'data', 'content', 'deviceModuleDetailInfo') ?? {};
+  const controlList = core
+    .map((entry) => get(entry as Record<string, never>, 'data', 'content', 'controlStatesSupported', 'attributes'))
+    .find(Array.isArray) as Array<{ itemId?: string; settings?: Array<{ settingName?: string; settingValue?: number }> }>
+    | undefined;
+  const controls = controlList && Object.fromEntries(controlList.map((c) => [
+    String(c.itemId),
+    (c.settings ?? []).map((st) => ({ value: Number(st.settingValue), name: String(st.settingName ?? '') })),
+  ]));
   const versions = core
     .flatMap((entry) => get(entry as Record<string, never>, 'data', 'versions') ?? []) as
     Array<{ type?: string; currentVersion?: string }>;
@@ -195,6 +222,36 @@ export function extractStatusPayload(html: string): StatusPayload {
     network: detail,
     iaqGrade: get(detail, 'airStatusInfo', 'iaqGrade'),
     firmware: versions.find((v) => v.type === 'MCU')?.currentVersion,
+    productName: get(node, 'baseInfoForModelCodeData', 'deviceInfo', 'productName'),
+    controls,
+  };
+}
+
+const MODE_KEYS: Record<string, ModeSwitchKey> = {
+  [Mode.NIGHT]: 'night', [Mode.RAPID]: 'rapid', [Mode.ECO]: 'eco',
+};
+
+/**
+ * The status page lists the values each control accepts. That is the device's
+ * own word on which modes it has and how it encodes the light, so it outranks
+ * any table keyed by model. It is not a full capability list, though: a 400S
+ * accepts the lock command without listing it, so only modes and light are read.
+ */
+function capabilitiesOf(payload: StatusPayload): DeviceCapabilities {
+  const modeValues = payload.controls?.[Attr.MODE]?.map((st) => String(st.value));
+  const light = payload.controls?.[Attr.LIGHT];
+  let convention: LightConvention | undefined;
+  if (light?.some((st) => st.value === 1 || st.value === 3)) {
+    convention = 'mode';
+  } else {
+    // 0 and 2 exist under both conventions; which of them is named OFF decides.
+    const off = light?.find((st) => /^(off|꺼짐)$/i.test(st.name.trim()))?.value;
+    convention = off === 0 ? 'onOff' : off === 2 ? 'mode' : undefined;
+  }
+  return {
+    productName: payload.productName,
+    modes: modeValues?.flatMap((v) => (MODE_KEYS[v] ? [MODE_KEYS[v]] : [])),
+    light: convention,
   };
 }
 
@@ -257,6 +314,7 @@ export function parsePurifierState(
     ...filterLife(filters, sensor),
     aqGrade: iaqGrade,
     firmware: toFirmwareRevision(firmware),
+    capabilities: capabilitiesOf(payload),
     pm10: sensor['0002'],
     pm25: sensor['0001'],
     lux: sensor['0007'],

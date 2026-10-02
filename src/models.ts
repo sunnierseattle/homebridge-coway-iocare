@@ -1,6 +1,6 @@
-import type { LightConvention } from './purifierState.js';
+import type { LightConvention, ModeSwitchKey } from './purifierState.js';
 
-export type ModeSwitchKey = 'night' | 'rapid' | 'eco';
+export type { ModeSwitchKey };
 
 export interface ModelProfile {
   name: string;
@@ -9,6 +9,17 @@ export interface ModelProfile {
   /** The modes beyond Auto and Manual that the model accepts. */
   modes: ModeSwitchKey[];
 }
+
+/**
+ * Profiles by Coway's product name, which is how home-assistant-iocare tells
+ * models apart. It survives new model codes for the same product, which a code
+ * table does not (AP-1720G is a 250S that no code table knew).
+ */
+const BY_NAME: Record<string, ModelProfile> = {
+  'airmega 400s': { name: 'Airmega 400S', light: 'onOff', modes: ['night'] },
+  'airmega 250s': { name: 'Airmega 250S', light: 'mode', modes: ['night', 'rapid'] },
+  'airmega icons': { name: 'Airmega IconS', light: 'mode', modes: ['night'] },
+};
 
 /**
  * What each known model supports, keyed by Coway's productModel. Only the 400S
@@ -27,6 +38,6 @@ const MODELS: Record<string, ModelProfile> = {
   'AP-1722B': { name: 'Airmega IconS', light: 'mode', modes: ['night'] },
 };
 
-export function profileFor(productModel: string): ModelProfile | undefined {
-  return MODELS[productModel];
+export function profileFor(productModel: string, productName?: string): ModelProfile | undefined {
+  return (productName && BY_NAME[productName.trim().toLowerCase()]) || MODELS[productModel];
 }

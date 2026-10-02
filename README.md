@@ -30,7 +30,7 @@ one. If you own one of these, please report back.
 | Model | Expected to work | Caveats |
 |---|---|---|
 | Airmega 300S / 400 (`AP-1521E`, `AP-1515G`) | Full | Same attribute set and filter layout as the 400S. |
-| Airmega 250S (`AP-1719A`, `AP-1720G`) | Full | The panel light uses the inverted convention, which the plugin selects from the model code. Coway's filter endpoint is unfinished for this model, so filter life comes from sensors instead. Rapid mode needs `exposeModeSwitches`. |
+| Airmega 250S (`AP-1719A`, `AP-1720G`) | Full | The panel light uses the inverted convention, which the plugin reads from the device's own control list, or failing that its product name. Coway's filter endpoint is unfinished for this model, so filter life comes from sensors instead. Rapid mode needs `exposeModeSwitches`. |
 | Airmega IconS (`AP-1722B`) | Light is approximate | Same inverted convention as the 250S. Its "half off" light state is reported as on, since HomeKit has only a boolean. |
 | Airmega AP-1512HHS | Full | Eco mode needs `exposeModeSwitches`. |
 | UK / EU models | Untested | Model codes `02FMG` (UK), `02FMF` / `02FWN` (EU). Every request currently uses Coway's US region, and no UK or EU account has tried it. Their third *odor* filter is published automatically when present. |
@@ -53,13 +53,17 @@ one. If you own one of these, please report back.
 - **Panel light.** Coway uses attribute `0007` under two contradictory
   conventions: on the 400S `2` is on, while on the 250S and IconS it is an enum
   where `0` is on and `2` is off. Readings of `0` and `2` are valid under both
-  and cannot be told apart, so the plugin picks the convention from the model
-  code. An unrecognised model starts on the 400S convention and switches
-  automatically if it ever sees a `1` or `3`, which only the enum convention
-  produces. `lightConvention` overrides both.
+  and cannot be told apart from a reading alone. The status page also lists the
+  values each control accepts, though, and which value is named *OFF* settles
+  it. Failing that, the plugin goes by Coway's product name, then the model
+  code; an unrecognised model starts on the 400S convention and switches if it
+  ever sees a `1` or `3`, which only the enum convention produces.
+  `lightConvention` overrides all of it.
 - **Modes.** HomeKit's air purifier has only Auto and Manual. Night, Rapid and
   Eco are always *reported*; setting them needs `exposeModeSwitches`, which
-  offers only the modes the model supports. An unrecognised model gets all three.
+  offers only the modes the device lists as accepted (falling back to the
+  product name, then the model code). An unrecognised model gets all three.
+  What the device declared is remembered, so a restart starts from it.
 
 ## How it works, and what that costs you
 

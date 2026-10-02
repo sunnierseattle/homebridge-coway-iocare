@@ -13,7 +13,7 @@ const device = {
 
 const state = (overrides: Partial<PurifierState> = {}): PurifierState => ({
   isOn: true, autoMode: false, nightMode: false, rapidMode: false, ecoMode: false,
-  fanSpeed: 2, online: true, ...overrides,
+  fanSpeed: 2, online: true, capabilities: {}, ...overrides,
 });
 
 function makeAccessory(
@@ -265,5 +265,56 @@ describe('AirmegaAccessory write coalescing', () => {
 
     expect(speed(purifier).value).toBe(100);
     vi.useRealTimers();
+  });
+});
+
+describe('AirmegaAccessory capabilities reported by the device', () => {
+  const unknown = { ...device, productModel: 'AP-9999X' };
+  const switches = (accessory: FakePlatformAccessory) => accessory.services
+    .filter((svc) => svc.UUID === hap.Service.Switch.UUID).map((svc) => svc.subtype).sort();
+  const reporting = (capabilities: PurifierState['capabilities']) =>
+    ({ readState: () => Promise.resolve(state({ capabilities })) });
+
+  it('narrows the mode switches to what the device lists once it has been read', async () => {
+    const { airmega, accessory } = makeAccessory(reporting({ modes: ['night'] }), { exposeModeSwitches: true }, unknown);
+    expect(switches(accessory)).toEqual(['eco', 'night', 'rapid']);
+
+    await airmega.refresh();
+    expect(switches(accessory)).toEqual(['night']);
+  });
+
+  it('uses Coway\'s product name when the device lists no modes', async () => {
+    const { airmega, accessory } = makeAccessory(
+      reporting({ productName: 'Airmega 250S' }), { exposeModeSwitches: true }, unknown);
+    await airmega.refresh();
+    expect(switches(accessory)).toEqual(['night', 'rapid']);
+  });
+
+  it('adopts the light convention the device declares', async () => {
+    const { airmega, accessory, client } = makeAccessory(reporting({ light: 'mode' }), { exposeLight: true }, unknown);
+    await airmega.refresh();
+
+    await accessory.getService(hap.Service.Lightbulb)!.getCharacteristic(hap.Characteristic.On).handleSetRequest(true);
+    expect(client.control).toHaveBeenCalledWith(expect.anything(), '0007', '0');
+  });
+
+  it('still lets an explicit light setting win', async () => {
+    const { airmega, accessory, client } = makeAccessory(
+      reporting({ light: 'mode' }), { exposeLight: true, lightConvention: 'onOff' }, unknown);
+    await airmega.refresh();
+
+    await accessory.getService(hap.Service.Lightbulb)!.getCharacteristic(hap.Characteristic.On).handleSetRequest(true);
+    expect(client.control).toHaveBeenCalledWith(expect.anything(), '0007', '2');
+  });
+
+  it('remembers what the device declared across restarts, before the first poll', async () => {
+    const first = makeAccessory(reporting({ modes: ['night'] }), { exposeModeSwitches: true }, unknown);
+    await first.airmega.refresh();
+
+    new AirmegaAccessory(
+      { Service: hap.Service, Characteristic: hap.Characteristic, api: { hap },
+        config: { exposeModeSwitches: true }, log: makeLog() } as never,
+      first.accessory as never, first.client as never, unknown);
+    expect(switches(first.accessory)).toEqual(['night']);
   });
 });

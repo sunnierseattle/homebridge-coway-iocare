@@ -119,6 +119,45 @@ describe('extractStatusPayload — streamed (RSC flight) pages', () => {
   });
 });
 
+describe('device capabilities', () => {
+  const setting = (settingValue: number, settingName: string) => ({ settingName, settingValue });
+  const pageWith = (controls: unknown[] | undefined, productName?: string) => `<script>${JSON.stringify({
+    coreData: [
+      { data: { sensorInfo: { attributes: {} } } },
+      ...(controls ? [{ data: { content: { controlStatesSupported: { attributes: controls } } } }] : []),
+    ],
+    deviceStatusData: { data: { statusInfo: { attributes: {} } } },
+    ...(productName ? { baseInfoForModelCodeData: { deviceInfo: { productName } } } : {}),
+  })}</script>`;
+  const caps = (html: string) => parsePurifierState(extractStatusPayload(html)).capabilities;
+
+  it('reads a 400S: Night is its only extra mode, and its light is plain on/off', () => {
+    // As captured from a live 400S on 2026-10-02.
+    const out = caps(pageWith([
+      { itemId: '0002', settings: [setting(1, '자동'), setting(2, '정음'), setting(4, '스마트케넥트')] },
+      { itemId: '0007', settings: [setting(0, 'OFF'), setting(2, '2단')] },
+    ], 'Airmega 400S'));
+    expect(out).toEqual({ productName: 'Airmega 400S', modes: ['night'], light: 'onOff' });
+  });
+
+  it('recognises the inverted light enum from its extra values', () => {
+    const out = caps(pageWith([
+      { itemId: '0002', settings: [setting(1, 'auto'), setting(2, 'night'), setting(5, 'rapid')] },
+      { itemId: '0007', settings: [setting(0, 'ON'), setting(1, 'AQI OFF'), setting(2, 'OFF'), setting(3, 'HALF')] },
+    ]));
+    expect(out).toMatchObject({ modes: ['night', 'rapid'], light: 'mode' });
+  });
+
+  it('recognises the inverted light from where OFF sits, even without the extra values', () => {
+    const out = caps(pageWith([{ itemId: '0007', settings: [setting(0, 'ON'), setting(2, 'OFF')] }]));
+    expect(out.light).toBe('mode');
+  });
+
+  it('leaves capabilities unknown when the page does not list them', () => {
+    expect(caps(pageWith(undefined))).toEqual({ productName: undefined, modes: undefined, light: undefined });
+  });
+});
+
 describe('toFirmwareRevision', () => {
   it.each([
     ['V1.0.0.2', '1.0.0'], ['1.2', '1.2'], ['v10.4.1', '10.4.1'], ['4889', '4889'],
