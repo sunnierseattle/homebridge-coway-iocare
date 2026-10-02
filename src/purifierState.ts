@@ -9,6 +9,8 @@ export interface StatusPayload {
   sensor: AttributeMap;
   network: { wifiConnected?: boolean };
   iaqGrade?: number;
+  /** The MCU firmware version as Coway words it, e.g. "V1.0.0.2". */
+  firmware?: string;
 }
 
 /** How a model encodes attribute 0007. See LIGHT_CONVENTIONS below. */
@@ -38,6 +40,8 @@ export interface PurifierState {
   /** UK and EU models carry a third, odor filter. Undefined elsewhere. */
   odorFilterPct?: number;
   aqGrade?: number;
+  /** Firmware in HomeKit's dotted-number form, or undefined when unknown. */
+  firmware?: string;
   pm10?: number;
   pm25?: number;
   lux?: number;
@@ -181,12 +185,16 @@ export function extractStatusPayload(html: string): StatusPayload {
     .find((data) => data && typeof data === 'object' && 'sensorInfo' in (data as object));
 
   const detail = get(node, 'deviceModule', 'data', 'content', 'deviceModuleDetailInfo') ?? {};
+  const versions = core
+    .flatMap((entry) => get(entry as Record<string, never>, 'data', 'versions') ?? []) as
+    Array<{ type?: string; currentVersion?: string }>;
 
   return {
     status: get(node, 'deviceStatusData', 'data', 'statusInfo', 'attributes') ?? {},
     sensor: get(sensorHolder as Record<string, never>, 'sensorInfo', 'attributes') ?? {},
     network: detail,
     iaqGrade: get(detail, 'airStatusInfo', 'iaqGrade'),
+    firmware: versions.find((v) => v.type === 'MCU')?.currentVersion,
   };
 }
 
@@ -216,11 +224,19 @@ function filterLife(
   };
 }
 
+/**
+ * HomeKit accepts a firmware revision only as up to three dot-separated numbers.
+ * Coway words it "V1.0.0.2", so drop the prefix and anything past the third part.
+ */
+export function toFirmwareRevision(raw: string | undefined): string | undefined {
+  return raw?.match(/^\D*(\d+(?:\.\d+){0,2})/)?.[1];
+}
+
 export function parsePurifierState(
   payload: StatusPayload,
   filters?: FilterReading[],
 ): PurifierState {
-  const { status, sensor, network, iaqGrade } = payload;
+  const { status, sensor, network, iaqGrade, firmware } = payload;
   const mode = status[Attr.MODE];
 
   return {
@@ -240,6 +256,7 @@ export function parsePurifierState(
     online: network.wifiConnected !== false,
     ...filterLife(filters, sensor),
     aqGrade: iaqGrade,
+    firmware: toFirmwareRevision(firmware),
     pm10: sensor['0002'],
     pm25: sensor['0001'],
     lux: sensor['0007'],

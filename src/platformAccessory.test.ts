@@ -115,3 +115,40 @@ describe('AirmegaAccessory readings', () => {
       expect(filter.getCharacteristic(hap.Characteristic.FilterChangeIndication).value).toBe(indication);
     });
 });
+
+describe('AirmegaAccessory naming', () => {
+  it('names each extra tile, so Home does not label them all with the purifier\'s name', async () => {
+    const { airmega, accessory } = makeAccessory(
+      { readState: () => Promise.resolve(state({ preFilterPct: 80 })) }, { exposeLight: true });
+    await airmega.refresh();
+
+    const name = (svc: hap.Service | undefined) => svc?.getCharacteristic(hap.Characteristic.ConfiguredName).value;
+    expect(name(accessory.getService(hap.Service.AirQualitySensor))).toBe('Bedroom Air Quality');
+    expect(name(accessory.getService(hap.Service.Lightbulb))).toBe('Bedroom Light');
+    expect(name(accessory.getServiceById(hap.Service.FilterMaintenance, 'pre-filter'))).toBe('Bedroom Pre-Filter');
+  });
+
+  it('keeps a name the user changed in the Home app', () => {
+    const first = makeAccessory();
+    const aq = first.accessory.getService(hap.Service.AirQualitySensor)!;
+    aq.setCharacteristic(hap.Characteristic.ConfiguredName, 'Nursery Air');
+
+    // Restored from the cache on the next launch.
+    new AirmegaAccessory(
+      { Service: hap.Service, Characteristic: hap.Characteristic, api: { hap }, config: {}, log: makeLog() } as never,
+      first.accessory as never, first.client as never, device);
+    expect(aq.getCharacteristic(hap.Characteristic.ConfiguredName).value).toBe('Nursery Air');
+  });
+
+  it('marks the purifier as the primary service', () => {
+    const { purifier } = makeAccessory();
+    expect(purifier.isPrimaryService).toBe(true);
+  });
+
+  it('reports the purifier\'s firmware version', async () => {
+    const { airmega, accessory } = makeAccessory({ readState: () => Promise.resolve(state({ firmware: '1.0.0' })) });
+    await airmega.refresh();
+    const info = accessory.getService(hap.Service.AccessoryInformation)!;
+    expect(info.getCharacteristic(hap.Characteristic.FirmwareRevision).value).toBe('1.0.0');
+  });
+});

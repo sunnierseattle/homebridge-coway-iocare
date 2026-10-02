@@ -10,6 +10,7 @@ import {
   lightCommand,
   detectLightConvention,
   commandsFor,
+  toFirmwareRevision,
 } from './purifierState.js';
 
 describe('extractStatusPayload', () => {
@@ -40,6 +41,15 @@ describe('extractStatusPayload', () => {
   it('ignores script tags that do not carry the sensor payload', () => {
     const noisy = `<script>window.a={}</script>${wrap(page)}`;
     expect(extractStatusPayload(noisy).status).toEqual({ '0001': 1, '0002': 2 });
+  });
+
+  it('reads the MCU firmware version from the device\'s version list', () => {
+    const withVersions = structuredClone(page);
+    (withVersions.children[1] as { coreData: unknown[] }).coreData.unshift({ data: { versions: [
+      { category: 'FIRMWARE', type: 'WIFI', currentVersion: '4889' },
+      { category: 'FIRMWARE', type: 'MCU', currentVersion: 'V1.0.0.2' },
+    ] } });
+    expect(extractStatusPayload(wrap(withVersions)).firmware).toBe('V1.0.0.2');
   });
 
   it('throws a typed error when the page has no payload, rather than returning junk', () => {
@@ -106,6 +116,15 @@ describe('extractStatusPayload — streamed (RSC flight) pages', () => {
 
   it('fails loudly when the device row is not valid JSON', () => {
     expect(() => extractStatusPayload(page('7:{"sensorInfo": oops}\n'))).toThrow(/parse/i);
+  });
+});
+
+describe('toFirmwareRevision', () => {
+  it.each([
+    ['V1.0.0.2', '1.0.0'], ['1.2', '1.2'], ['v10.4.1', '10.4.1'], ['4889', '4889'],
+    ['beta', undefined], [undefined, undefined],
+  ])('turns %s into HomeKit\'s dotted-number form (%s)', (raw, expected) => {
+    expect(toFirmwareRevision(raw)).toBe(expected);
   });
 });
 

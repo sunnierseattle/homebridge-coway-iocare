@@ -57,6 +57,8 @@ export class AirmegaAccessory {
 
     this.purifier = this.accessory.getService(Service.AirPurifier)
       ?? this.accessory.addService(Service.AirPurifier, device.nickname);
+    // Home shows the primary service's controls first and names the tile after it.
+    this.purifier.setPrimaryService(true);
 
     this.purifier.getCharacteristic(Characteristic.Active)
       .onGet(() => this.read((s) => (s.isOn ? 1 : 0), 0))
@@ -88,12 +90,14 @@ export class AirmegaAccessory {
 
     this.airQuality = this.accessory.getService(Service.AirQualitySensor)
       ?? this.accessory.addService(Service.AirQualitySensor, `${device.nickname} Air Quality`);
+    this.nameService(this.airQuality, `${device.nickname} Air Quality`);
     this.airQuality.getCharacteristic(Characteristic.AirQuality)
       .onGet(() => this.read((s) => toAirQuality(s.aqGrade), 0));
 
     if (platform.config.exposeLight) {
       this.light = this.accessory.getService(Service.Lightbulb)
         ?? this.accessory.addService(Service.Lightbulb, `${device.nickname} Light`);
+      this.nameService(this.light, `${device.nickname} Light`);
       this.light.getCharacteristic(Characteristic.On)
         .onGet(() => this.read((s) => isLightOn(s.lightRaw, this.lightConvention), false))
         .onSet((v) => this.send(Attr.LIGHT, lightCommand(Boolean(v), this.lightConvention)));
@@ -103,6 +107,7 @@ export class AirmegaAccessory {
       for (const m of MODE_SWITCHES) {
         const svc = this.accessory.getServiceById(Service.Switch, m.key)
           ?? this.accessory.addService(Service.Switch, `${device.nickname} ${m.label}`, m.key);
+        this.nameService(svc, `${device.nickname} ${m.label}`);
         svc.getCharacteristic(Characteristic.On)
           .onGet(() => this.read((s) => Boolean(s[m.flag]), false))
           // Turning a mode off has no inverse command, so fall back to auto.
@@ -116,9 +121,23 @@ export class AirmegaAccessory {
   /** Create a filter service only once the device has proven it has that filter. */
   private filterService(label: string, subtype: string): Service {
     const { Service } = this.platform;
-    return this.accessory.getServiceById(Service.FilterMaintenance, subtype)
-      ?? this.accessory.addService(
-        Service.FilterMaintenance, `${this.device.nickname} ${label}`, subtype);
+    const name = `${this.device.nickname} ${label}`;
+    const svc = this.accessory.getServiceById(Service.FilterMaintenance, subtype)
+      ?? this.accessory.addService(Service.FilterMaintenance, name, subtype);
+    this.nameService(svc, name);
+    return svc;
+  }
+
+  /**
+   * Since iOS 16, Home labels a secondary service by ConfiguredName and falls back
+   * to the accessory's name, so every sub-tile read "Bedroom". Set it once, so a
+   * name the user later changes in Home survives restarts.
+   */
+  private nameService(svc: Service, name: string): void {
+    const configured = svc.getCharacteristic(this.platform.Characteristic.ConfiguredName);
+    if (!configured.value) {
+      configured.updateValue(name);
+    }
   }
 
   private read<T extends CharacteristicValue>(pick: (s: PurifierState) => T, fallback: T): T {
@@ -200,6 +219,11 @@ export class AirmegaAccessory {
       if (!s.online) {
         this.purifier.updateCharacteristic(Characteristic.Active, this.noResponse());
         return;
+      }
+
+      if (s.firmware) {
+        this.accessory.getService(this.platform.Service.AccessoryInformation)
+          ?.updateCharacteristic(Characteristic.FirmwareRevision, s.firmware);
       }
 
       // A value only the enum convention can produce settles the ambiguity.
