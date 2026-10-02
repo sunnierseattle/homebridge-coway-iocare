@@ -1,7 +1,7 @@
 {
   "name": "homebridge-coway-iocare",
   "displayName": "Coway Airmega",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Homebridge plugin for WiFi-connected Coway Airmega air purifiers via the IoCare cloud API.",
   "license": "Apache-2.0",
   "type": "module",
