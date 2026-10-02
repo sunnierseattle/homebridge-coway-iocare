@@ -1,6 +1,7 @@
 import type { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 
 import type { CowayClient, PurifierDevice } from './cowayClient.js';
+import { profileFor } from './models.js';
 import type { CowayPlatform } from './platform.js';
 import {
   commandsFor, detectLightConvention, isLightOn, lightCommand,
@@ -48,7 +49,13 @@ export class AirmegaAccessory {
     private readonly device: PurifierDevice,
   ) {
     const { Service, Characteristic } = platform;
-    this.lightConvention = platform.config.lightConvention ?? 'onOff';
+    const profile = profileFor(device.productModel);
+    // An explicit setting wins; otherwise the model decides. Unknown models start
+    // on the common convention and auto-detection corrects them if it can.
+    const configured = platform.config.lightConvention;
+    this.lightConvention = configured === 'onOff' || configured === 'mode'
+      ? configured
+      : profile?.light ?? 'onOff';
 
     this.accessory.getService(Service.AccessoryInformation)!
       .setCharacteristic(Characteristic.Manufacturer, 'Coway')
@@ -103,18 +110,26 @@ export class AirmegaAccessory {
         .onSet((v) => this.send(Attr.LIGHT, lightCommand(Boolean(v), this.lightConvention)));
     }
 
-    if (platform.config.exposeModeSwitches) {
-      for (const m of MODE_SWITCHES) {
-        const svc = this.accessory.getServiceById(Service.Switch, m.key)
-          ?? this.accessory.addService(Service.Switch, `${device.nickname} ${m.label}`, m.key);
-        this.nameService(svc, `${device.nickname} ${m.label}`);
-        svc.getCharacteristic(Characteristic.On)
-          .onGet(() => this.read((s) => Boolean(s[m.flag]), false))
-          // Turning a mode off has no inverse command, so fall back to auto.
-          .onSet((v) => this.sendAll(
-            commandsFor.mode(this.state?.isOn ?? false, v ? m.value : Mode.AUTO)));
-        this.modeSwitches.set(m.key, svc);
+    // A switch for a mode the model lacks is rejected by Coway and sits at No
+    // Response, so offer only the model's own. Unknown models get all of them.
+    const offered = platform.config.exposeModeSwitches
+      ? MODE_SWITCHES.filter((m) => !profile || profile.modes.includes(m.key))
+      : [];
+    for (const svc of this.accessory.services.filter((s) => s.UUID === Service.Switch.UUID)) {
+      if (!offered.some((m) => m.key === svc.subtype)) {
+        this.accessory.removeService(svc);
       }
+    }
+    for (const m of offered) {
+      const svc = this.accessory.getServiceById(Service.Switch, m.key)
+        ?? this.accessory.addService(Service.Switch, `${device.nickname} ${m.label}`, m.key);
+      this.nameService(svc, `${device.nickname} ${m.label}`);
+      svc.getCharacteristic(Characteristic.On)
+        .onGet(() => this.read((s) => Boolean(s[m.flag]), false))
+        // Turning a mode off has no inverse command, so fall back to auto.
+        .onSet((v) => this.sendAll(
+          commandsFor.mode(this.state?.isOn ?? false, v ? m.value : Mode.AUTO)));
+      this.modeSwitches.set(m.key, svc);
     }
   }
 

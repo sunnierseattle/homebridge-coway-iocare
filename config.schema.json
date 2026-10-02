@@ -44,21 +44,27 @@
         "title": "Expose the panel light as a bulb",
         "type": "boolean",
         "default": false,
-        "description": "Panel light. On the 250S and IconS the plugin auto-detects the inverted convention once it observes a distinguishing value; set Light Convention below if it guesses wrong."
+        "description": "Panel light. The plugin picks the right on/off encoding for known models, and auto-detects it on others once it sees a distinguishing value."
       },
       "exposeModeSwitches": {
-        "title": "Expose Night / Rapid / Eco as switches",
+        "title": "Expose Night / Rapid / Eco modes as switches",
         "type": "boolean",
         "default": false,
-        "description": "HomeKit's air purifier has only Auto and Manual. These switches reach the modes it cannot express. Rapid is a 250S feature and Eco an AP-1512HHS feature; a switch for a mode your model lacks will simply be rejected by Coway."
+        "description": "HomeKit's air purifier has only Auto and Manual. These switches reach the modes it cannot express. Only the modes your model supports are shown: Night on most models, Rapid on the 250S, Eco on the AP-1512HHS. Unrecognised models get all three."
       },
       "lightConvention": {
         "title": "Light Convention",
         "type": "string",
-        "default": "onOff",
+        "default": "auto",
         "oneOf": [
           {
-            "title": "On/Off - 400S and most models (verified)",
+            "title": "Automatic - from the model",
+            "enum": [
+              "auto"
+            ]
+          },
+          {
+            "title": "On/Off - 400S, 300S, AP-1512HHS",
             "enum": [
               "onOff"
             ]
@@ -70,7 +76,7 @@
             ]
           }
         ],
-        "description": "Only relevant when the panel light is exposed. Leave on the default unless the light behaves backwards."
+        "description": "Only relevant when the panel light is exposed. Leave on Automatic unless the light behaves backwards."
       }
     }
   }

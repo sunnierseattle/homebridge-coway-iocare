@@ -152,3 +152,46 @@ describe('AirmegaAccessory naming', () => {
     expect(info.getCharacteristic(hap.Characteristic.FirmwareRevision).value).toBe('1.0.0');
   });
 });
+
+describe('AirmegaAccessory per-model capabilities', () => {
+  const model = (productModel: string) => ({ ...device, productModel });
+  const switches = (accessory: FakePlatformAccessory) => accessory.services
+    .filter((svc) => svc.UUID === hap.Service.Switch.UUID).map((svc) => svc.subtype).sort();
+
+  it('drives the 250S panel light with its inverted convention by default', async () => {
+    const { accessory, client } = makeAccessory({}, { exposeLight: true }, model('AP-1719A'));
+    const light = accessory.getService(hap.Service.Lightbulb)!;
+
+    await light.getCharacteristic(hap.Characteristic.On).handleSetRequest(true);
+
+    expect(client.control).toHaveBeenCalledWith(expect.anything(), '0007', '0');
+  });
+
+  it('still honours an explicit light convention over the model default', async () => {
+    const { accessory, client } = makeAccessory(
+      {}, { exposeLight: true, lightConvention: 'onOff' }, model('AP-1719A'));
+    await accessory.getService(hap.Service.Lightbulb)!
+      .getCharacteristic(hap.Characteristic.On).handleSetRequest(true);
+    expect(client.control).toHaveBeenCalledWith(expect.anything(), '0007', '2');
+  });
+
+  it.each([
+    ['AP-2015E', ['night']],
+    ['AP-1719A', ['night', 'rapid']],
+    ['AP-1512HHS', ['eco']],
+    ['AP-9999X', ['eco', 'night', 'rapid']],
+  ])('offers only the mode switches a %s supports', (productModel, expected) => {
+    const { accessory } = makeAccessory({}, { exposeModeSwitches: true }, model(productModel));
+    expect(switches(accessory)).toEqual(expected);
+  });
+
+  it('removes a cached mode switch the model does not support', () => {
+    const accessory = new FakePlatformAccessory('Bedroom', hap.uuid.generate('SERIAL1'));
+    accessory.addService(hap.Service.Switch, 'Bedroom Rapid Mode', 'rapid');
+    new AirmegaAccessory(
+      { Service: hap.Service, Characteristic: hap.Characteristic, api: { hap },
+        config: { exposeModeSwitches: true }, log: makeLog() } as never,
+      accessory as never, { control: vi.fn(), readState: vi.fn() } as never, model('AP-2015E'));
+    expect(switches(accessory)).toEqual(['night']);
+  });
+});
