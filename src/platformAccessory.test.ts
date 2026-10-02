@@ -195,3 +195,75 @@ describe('AirmegaAccessory per-model capabilities', () => {
     expect(switches(accessory)).toEqual(['night']);
   });
 });
+
+describe('AirmegaAccessory write coalescing', () => {
+  const speed = (purifier: hap.Service) => purifier.getCharacteristic(hap.Characteristic.RotationSpeed);
+
+  async function onAndPolled(client = {}) {
+    const made = makeAccessory(client);
+    await made.airmega.refresh();
+    made.client.control.mockClear();
+    return made;
+  }
+
+  it('sends one command for a burst of slider changes, at the final position', async () => {
+    vi.useFakeTimers();
+    const { purifier, client } = await onAndPolled();
+
+    const writes = [33, 67, 100].map((v) => speed(purifier).handleSetRequest(v));
+    await vi.advanceTimersByTimeAsync(300);
+    await Promise.all(writes);
+
+    expect(client.control).toHaveBeenCalledTimes(1);
+    expect(client.control).toHaveBeenCalledWith(expect.anything(), '0003', '3');
+    vi.useRealTimers();
+  });
+
+  it('drops a pending speed change when the purifier is turned off', async () => {
+    vi.useFakeTimers();
+    const { purifier, active, client } = await onAndPolled();
+
+    const pending = speed(purifier).handleSetRequest(67);
+    await active.handleSetRequest(0);
+    await vi.advanceTimersByTimeAsync(300);
+    await pending;
+
+    expect(client.control.mock.calls.map((c) => (c as unknown[])[1])).toEqual(['0001']);
+    vi.useRealTimers();
+  });
+
+  it('reports a failed coalesced write to every waiting slider change', async () => {
+    vi.useFakeTimers();
+    const { purifier, client } = await onAndPolled();
+    client.control.mockRejectedValue(new Error('socket hang up'));
+
+    const writes = [33, 100].map((v) => speed(purifier).handleSetRequest(v));
+    const settled = Promise.allSettled(writes);
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect((await settled).map((r) => r.status)).toEqual(['rejected', 'rejected']);
+    vi.useRealTimers();
+  });
+
+  it('ignores a poll that was already in flight when a command went out', async () => {
+    vi.useFakeTimers();
+    let finishRead: (s: PurifierState) => void = () => {};
+    const readState = vi.fn()
+      .mockResolvedValueOnce(state({ fanSpeed: 1 }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        finishRead = resolve;
+      }))
+      .mockResolvedValue(state({ fanSpeed: 3 }));
+    const { airmega, purifier } = await onAndPolled({ readState });
+
+    const poll = airmega.refresh(); // starts reading the pre-command state
+    const write = speed(purifier).handleSetRequest(100);
+    await vi.advanceTimersByTimeAsync(300);
+    await write;
+    finishRead(state({ fanSpeed: 1 })); // the stale snapshot lands after the command
+    await poll;
+
+    expect(speed(purifier).value).toBe(100);
+    vi.useRealTimers();
+  });
+});

@@ -11,6 +11,14 @@ import { Attr, Mode } from './settings.js';
 
 const FAILURES_BEFORE_WARNING = 3;
 const FILTER_CHANGE_BELOW_PCT = 10;
+/** Dragging the Home slider fires a write per step; wait for it to settle. */
+const SPEED_SETTLE_MS = 250;
+
+interface PendingSpeed {
+  percent: number;
+  timer?: NodeJS.Timeout;
+  waiters: Array<{ resolve: () => void; reject: (err: unknown) => void }>;
+}
 /** Once warned, repeat at this many consecutive failures (about every 30 minutes at 60s). */
 const WARNING_REPEAT_EVERY = 30;
 
@@ -41,6 +49,9 @@ export class AirmegaAccessory {
   private lightConvention: LightConvention;
   /** Consecutive failed polls, so a run of them is reported once, not every minute. */
   private failures = 0;
+  private pendingSpeed?: PendingSpeed;
+  /** Bumped by every command, so a poll that straddles one can be recognised as stale. */
+  private commandEpoch = 0;
 
   constructor(
     private readonly platform: CowayPlatform,
@@ -89,7 +100,7 @@ export class AirmegaAccessory {
     this.purifier.getCharacteristic(Characteristic.RotationSpeed)
       .setProps({ minStep: 100 / 3 }) // one step per fan speed; 33 would cap at 99
       .onGet(() => this.read((s) => toRotationSpeed(s.fanSpeed), 0))
-      .onSet((v) => this.sendAll(commandsFor.speed(this.state?.isOn ?? false, Number(v))));
+      .onSet((v) => this.setSpeed(Number(v)));
 
     this.purifier.getCharacteristic(Characteristic.LockPhysicalControls)
       .onGet(() => this.read((s) => (s.buttonLock ? 1 : 0), this.accessory.context.buttonLock ? 1 : 0))
@@ -169,6 +180,46 @@ export class AirmegaAccessory {
     return new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
+  /**
+   * Coalesce a burst of slider writes into one command for the final position.
+   * Every write in the burst resolves, or fails, with that command, so HomeKit
+   * still learns when Coway is unreachable.
+   */
+  private setSpeed(percent: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const pending = this.pendingSpeed ??= { percent, waiters: [] };
+      pending.percent = percent;
+      pending.waiters.push({ resolve, reject });
+      clearTimeout(pending.timer);
+      pending.timer = setTimeout(() => void this.flushSpeed(), SPEED_SETTLE_MS);
+    });
+  }
+
+  private async flushSpeed(): Promise<void> {
+    const pending = this.pendingSpeed;
+    this.pendingSpeed = undefined;
+    if (!pending) {
+      return;
+    }
+    try {
+      await this.sendAll(commandsFor.speed(this.state?.isOn ?? false, pending.percent));
+      pending.waiters.forEach((w) => w.resolve());
+    } catch (err) {
+      pending.waiters.forEach((w) => w.reject(err));
+    }
+  }
+
+  /** A later power-off or mode change supersedes a speed still settling. */
+  private cancelPendingSpeed(): void {
+    const pending = this.pendingSpeed;
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    this.pendingSpeed = undefined;
+    pending.waiters.forEach((w) => w.resolve());
+  }
+
   /** Apply commands in order; Coway accepts only one attribute per call. */
   private async sendAll(commands: Command[]): Promise<void> {
     for (const c of commands) {
@@ -177,6 +228,10 @@ export class AirmegaAccessory {
   }
 
   private async send(attribute: string, value: string): Promise<void> {
+    if ((attribute === Attr.POWER && value === '0') || attribute === Attr.MODE) {
+      this.cancelPendingSpeed();
+    }
+    this.commandEpoch++;
     try {
       await this.client.control(this.device, attribute, value);
     } catch (err) {
@@ -221,7 +276,14 @@ export class AirmegaAccessory {
   async refresh(): Promise<void> {
     const { Characteristic } = this.platform;
     try {
+      const epoch = this.commandEpoch;
       const s = await this.client.readState(this.device);
+      if (epoch !== this.commandEpoch) {
+        // Read before a command landed; applying it would flip the tile back
+        // until the next poll.
+        this.failures = 0;
+        return;
+      }
       // Some models (the 400S) obey a lock command but never report lock state.
       // Hold the last value set, or the toggle snaps back to unlocked every poll.
       s.buttonLock ??= this.accessory.context.buttonLock ?? false;
