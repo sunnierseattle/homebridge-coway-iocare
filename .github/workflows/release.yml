@@ -1,0 +1,64 @@
+# Publish to npm and create the GitHub release when a version tag is pushed.
+# Release with: npm version patch && git push --follow-tags
+#
+# npm authenticates through trusted publishing (OIDC), so no token is stored
+# here. The trusted publisher on npmjs.com must name this file: release.yml.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the GitHub release
+  id-token: write # npm trusted publishing
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24' # bundles npm 11.19; trusted publishing needs 11.5.1+
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false # never cache in release builds
+
+      - name: Check the tag matches package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm test
+
+      # prepublishOnly runs lint and build. Skipped when this version is already
+      # on npm, so a re-run after a failed release step can still finish.
+      - name: Publish to npm
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "$name@$version is already on npm; skipping publish."
+          else
+            npm publish
+          fi
+
+      # The Homebridge UI reads its release notes from this.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; skipping."
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          fi
