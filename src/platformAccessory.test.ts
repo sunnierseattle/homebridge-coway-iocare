@@ -26,6 +26,9 @@ function makeAccessory(
     Service: hap.Service, Characteristic: hap.Characteristic, api: { hap }, config, log,
   } as unknown as CowayPlatform;
   const accessory = new FakePlatformAccessory(dev.nickname, hap.uuid.generate(dev.deviceSerial));
+  // Everything HAP would log as a plugin warning, across every service.
+  const hapWarnings: string[] = [];
+  accessory.on(hap.AccessoryEventTypes.CHARACTERISTIC_WARNING, (w) => hapWarnings.push(w.message));
   const doubles = {
     control: vi.fn(() => Promise.resolve()),
     readState: vi.fn(() => Promise.resolve(state())),
@@ -36,7 +39,7 @@ function makeAccessory(
   const active = purifier.getCharacteristic(hap.Characteristic.Active);
   const warnings: string[] = [];
   active.on(hap.CharacteristicEventTypes.CHARACTERISTIC_WARNING, (_type, message) => warnings.push(message));
-  return { airmega, accessory, purifier, active, log, warnings, client: doubles };
+  return { airmega, accessory, purifier, active, log, warnings, hapWarnings, client: doubles };
 }
 
 describe('AirmegaAccessory commands', () => {
@@ -316,5 +319,26 @@ describe('AirmegaAccessory capabilities reported by the device', () => {
         config: { exposeModeSwitches: true }, log: makeLog() } as never,
       first.accessory as never, first.client as never, unknown);
     expect(switches(first.accessory)).toEqual(['night']);
+  });
+});
+
+describe('AirmegaAccessory HAP hygiene', () => {
+  it('builds every tile without HAP warnings', async () => {
+    const { airmega, hapWarnings } = makeAccessory(
+      { readState: () => Promise.resolve(state({ preFilterPct: 80, max2Pct: 90, odorFilterPct: 70 })) },
+      { exposeLight: true, exposeModeSwitches: true });
+    await airmega.refresh();
+    expect(hapWarnings).toEqual([]);
+  });
+
+  it('shows Night mode at the lowest speed as soon as it is selected, not a poll later', async () => {
+    const { airmega, accessory, purifier } = makeAccessory(
+      { readState: () => Promise.resolve(state({ fanSpeed: 2 })) }, { exposeModeSwitches: true });
+    await airmega.refresh();
+
+    await accessory.getServiceById(hap.Service.Switch, 'night')!
+      .getCharacteristic(hap.Characteristic.On).handleSetRequest(true);
+
+    expect(purifier.getCharacteristic(hap.Characteristic.RotationSpeed).value).toBeCloseTo(100 / 3);
   });
 });

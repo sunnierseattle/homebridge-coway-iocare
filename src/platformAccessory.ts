@@ -180,7 +180,12 @@ export class AirmegaAccessory {
    * name the user later changes in Home survives restarts.
    */
   private nameService(svc: Service, name: string): void {
-    const configured = svc.getCharacteristic(this.platform.Characteristic.ConfiguredName);
+    const { ConfiguredName } = this.platform.Characteristic;
+    // Not in these services' optional lists, so declare it, or HAP warns per tile.
+    if (!svc.testCharacteristic(ConfiguredName)) {
+      svc.addOptionalCharacteristic(ConfiguredName);
+    }
+    const configured = svc.getCharacteristic(ConfiguredName);
     if (!configured.value) {
       configured.updateValue(name);
     }
@@ -290,7 +295,14 @@ export class AirmegaAccessory {
       this.state.nightMode = value === Mode.NIGHT;
       this.state.rapidMode = value === Mode.RAPID;
       this.state.ecoMode = value === Mode.ECO;
+      // Night runs the fan at its quietest; parsePurifierState reports it as step 1.
+      if (this.state.nightMode) {
+        this.state.fanSpeed = 1;
+      }
     }
+    // Show the knock-on effects now (a mode moves the slider, a speed leaves auto)
+    // rather than a poll later.
+    this.pushPurifierState(this.state);
   }
 
   async refresh(): Promise<void> {
@@ -340,11 +352,7 @@ export class AirmegaAccessory {
           `${this.device.nickname}: detected the "${detected}" panel-light convention.`);
       }
 
-      this.purifier.updateCharacteristic(Characteristic.Active, s.isOn ? 1 : 0);
-      this.purifier.updateCharacteristic(Characteristic.CurrentAirPurifierState, s.isOn ? 2 : 0);
-      this.purifier.updateCharacteristic(Characteristic.TargetAirPurifierState, s.autoMode ? 1 : 0);
-      this.purifier.updateCharacteristic(Characteristic.RotationSpeed, toRotationSpeed(s.fanSpeed));
-      this.purifier.updateCharacteristic(Characteristic.LockPhysicalControls, s.buttonLock ? 1 : 0);
+      this.pushPurifierState(s);
 
       this.airQuality.updateCharacteristic(Characteristic.AirQuality, toAirQuality(s.aqGrade));
       // Only publish a pollutant the model actually measures; a constant 0
@@ -362,9 +370,6 @@ export class AirmegaAccessory {
 
       this.light?.updateCharacteristic(
         Characteristic.On, isLightOn(s.lightRaw, this.lightConvention));
-      for (const m of MODE_SWITCHES) {
-        this.modeSwitches.get(m.key)?.updateCharacteristic(Characteristic.On, Boolean(s[m.flag]));
-      }
     } catch (err) {
       // One failure is usually a blip; a run of them means the user should know.
       this.failures++;
@@ -375,6 +380,18 @@ export class AirmegaAccessory {
       } else {
         this.platform.log.debug(message);
       }
+    }
+  }
+
+  private pushPurifierState(s: PurifierState): void {
+    const { Characteristic } = this.platform;
+    this.purifier.updateCharacteristic(Characteristic.Active, s.isOn ? 1 : 0);
+    this.purifier.updateCharacteristic(Characteristic.CurrentAirPurifierState, s.isOn ? 2 : 0);
+    this.purifier.updateCharacteristic(Characteristic.TargetAirPurifierState, s.autoMode ? 1 : 0);
+    this.purifier.updateCharacteristic(Characteristic.RotationSpeed, toRotationSpeed(s.fanSpeed));
+    this.purifier.updateCharacteristic(Characteristic.LockPhysicalControls, s.buttonLock ? 1 : 0);
+    for (const m of MODE_SWITCHES) {
+      this.modeSwitches.get(m.key)?.updateCharacteristic(Characteristic.On, Boolean(s[m.flag]));
     }
   }
 
