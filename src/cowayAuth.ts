@@ -86,6 +86,8 @@ export interface LoginOptions {
    * password is changed.
    */
   skipPasswordChange?: boolean;
+  /** Told when a password change was deferred, so the user can be reminded. */
+  onPasswordChangeDeferred?: () => void;
 }
 
 async function exchange(body: Record<string, string>, path: string): Promise<Tokens> {
@@ -179,6 +181,7 @@ export async function login(
       ? findFormAction(html, 'kc-password-change-form')
       : null;
     if (skipUrl) {
+      options.onPasswordChangeDeferred?.();
       jar.absorb(submitRes);
       // The same form the IoCare app submits for "change next time". The field
       // set matches cowayaio's and homebridge-airmega-iocare's.

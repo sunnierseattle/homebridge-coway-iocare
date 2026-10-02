@@ -56,6 +56,9 @@ export class CowayPlatform implements DynamicPlatformPlugin {
     }
     this.client = new CowayClient(config.username, config.password, undefined, {
       skipPasswordChange: config.skipPasswordChange ?? true,
+      onPasswordChangeDeferred: () => log.warn(
+        'Coway asked for a password change (its 60-day policy); deferred it. '
+          + 'Change the password in the IoCare+ app when convenient, then update this config.'),
     });
 
     api.on('didFinishLaunching', () => void this.discover());

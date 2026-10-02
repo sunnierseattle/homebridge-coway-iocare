@@ -29,11 +29,11 @@ one. If you own one of these, please report back.
 
 | Model | Expected to work | Caveats |
 |---|---|---|
-| Airmega 300S / 400 | Full | Same attribute set and filter layout as the 400S. |
-| Airmega 250S | Full | Panel light uses the inverted convention — auto-detected, or set `lightConvention` manually. Coway's filter endpoint is unfinished for this model, so filter life comes from sensors instead. Rapid mode needs `exposeModeSwitches`. |
-| Airmega IconS | Light is approximate | Same inverted convention as the 250S. Its "half off" light state is reported as on, since HomeKit has only a boolean. |
+| Airmega 300S / 400 (`AP-1521E`, `AP-1515G`) | Full | Same attribute set and filter layout as the 400S. |
+| Airmega 250S (`AP-1719A`, `AP-1720G`) | Full | The panel light uses the inverted convention, which the plugin selects from the model code. Coway's filter endpoint is unfinished for this model, so filter life comes from sensors instead. Rapid mode needs `exposeModeSwitches`. |
+| Airmega IconS (`AP-1722B`) | Light is approximate | Same inverted convention as the 250S. Its "half off" light state is reported as on, since HomeKit has only a boolean. |
 | Airmega AP-1512HHS | Full | Eco mode needs `exposeModeSwitches`. |
-| UK / EU models | Full | Model codes `02FMG` (UK), `02FMF` / `02FWN` (EU). Their third *odor* filter is published automatically when present. |
+| UK / EU models | Untested | Model codes `02FMG` (UK), `02FMF` / `02FWN` (EU). Every request currently uses Coway's US region, and no UK or EU account has tried it. Their third *odor* filter is published automatically when present. |
 
 ### Will not work
 
@@ -53,11 +53,13 @@ one. If you own one of these, please report back.
 - **Panel light.** Coway uses attribute `0007` under two contradictory
   conventions: on the 400S `2` is on, while on the 250S and IconS it is an enum
   where `0` is on and `2` is off. Readings of `0` and `2` are valid under both
-  and cannot be told apart, so the plugin defaults to the verified 400S
-  convention and switches automatically if it ever sees a `1` or `3`, which only
-  the enum convention produces. `lightConvention` overrides it outright.
+  and cannot be told apart, so the plugin picks the convention from the model
+  code. An unrecognised model starts on the 400S convention and switches
+  automatically if it ever sees a `1` or `3`, which only the enum convention
+  produces. `lightConvention` overrides both.
 - **Modes.** HomeKit's air purifier has only Auto and Manual. Night, Rapid and
-  Eco are always *reported*; setting them needs `exposeModeSwitches`.
+  Eco are always *reported*; setting them needs `exposeModeSwitches`, which
+  offers only the modes the model supports. An unrecognised model gets all three.
 
 ## How it works, and what that costs you
 
@@ -91,14 +93,20 @@ and the fix lives in `src/purifierState.ts`.
 | **Air Quality Sensor** | Air Quality, PM10 Density, PM2.5 Density *(only on models that report it)* |
 | **Filter Maintenance** ×2–3 | Filter Life Level and Filter Change Indication. Pre-filter and Max2 on all models; a third odor filter on UK/EU models. Each appears only if the device reports it. |
 | **Lightbulb** | The panel light — optional, disabled by default |
-| **Switch** ×3 | Night / Rapid / Eco — optional, disabled by default. HomeKit's air purifier cannot express these. |
+| **Switch** ×1–3 | Night / Rapid / Eco, whichever the model supports — optional, disabled by default. HomeKit's air purifier cannot express these. |
+
+Each extra tile is named after its function ("Bedroom Pre-Filter"), and a name
+you change in the Home app is kept. The purifier's firmware version appears in
+its accessory details. A purifier Coway reports as offline shows No Response
+rather than its last known state.
 
 ### Mapping notes
 
 Coway's hardware and HomeKit's model do not line up exactly. Where they diverge:
 
 - **Fan speed.** The hardware has three steps, so the HomeKit slider snaps to
-  33 / 67 / 100. Dragging to 0 powers the unit off. Setting any other speed on a
+  33 / 67 / 100. Dragging the slider sends one command once it settles, rather
+  than one per step. Dragging to 0 powers the unit off. Setting any other speed on a
   unit that is off powers it on first — Coway silently ignores a fan command
   sent to a powered-off purifier, which otherwise makes the slider look broken.
   Selecting a mode behaves the same way.
@@ -112,7 +120,7 @@ Coway's hardware and HomeKit's model do not line up exactly. Where they diverge:
 - **Air quality.** Coway grades 1–4; HomeKit uses 1–5. The mapping skips
   HomeKit's GOOD so Coway's worst grade still reaches POOR.
 - **Filter life.** Coway reports consumption, HomeKit wants life remaining, so
-  the values are inverted before publishing.
+  the values are inverted before publishing. Home asks for a change below 10%.
 
 ## Installation
 
@@ -143,12 +151,13 @@ Configurable through the Homebridge UI, or by hand:
 
 | Option | Type | Default | Notes |
 |---|---|---|---|
-| `username` | string | — | IoCare account email. Required. |
+| `username` | string | — | IoCare account email or phone number. Required. |
 | `password` | string | — | IoCare account password. Required. |
+| `skipPasswordChange` | boolean | `true` | Answer Coway's 60-day password-change prompt with "change next time", as the IoCare app allows. |
 | `pollIntervalSeconds` | integer | `60` | How often to read state. Values below 30 are clamped. |
 | `exposeLight` | boolean | `false` | Expose the panel light as a HomeKit bulb. |
-| `exposeModeSwitches` | boolean | `false` | Expose Night / Rapid / Eco as switches, which HomeKit cannot otherwise reach. |
-| `lightConvention` | `onOff` \| `mode` | `onOff` | Override the panel-light encoding. Auto-detected; only set this if the light behaves backwards. |
+| `exposeModeSwitches` | boolean | `false` | Expose the model's Night / Rapid / Eco modes as switches, which HomeKit cannot otherwise reach. |
+| `lightConvention` | `auto` \| `onOff` \| `mode` | `auto` | Panel-light encoding. `auto` follows the model; only change it if the light behaves backwards. |
 
 Purifiers are discovered automatically across every "place" on the account.
 
@@ -156,21 +165,26 @@ Purifiers are discovered automatically across every "place" on the account.
 
 Read this section before opening an issue about login failures.
 
+- **The purifier must be in the IoCare+ app.** The plugin signs in as the
+  IoCare+ app, the newer of Coway's two apps. If discovery finds no purifiers,
+  check that yours appears in IoCare+, not only in the older IoCare app.
 - **Email/password accounts only.** If your IoCare account signs in with Google
   or Apple, there is no password to send and the plugin cannot authenticate.
   You would need to create an IoCare account with a password.
-- **Coway forces a password change every 60 days.** The mobile app lets you
-  defer this; a headless login cannot. When it triggers, the plugin raises
-  `PasswordExpiredError` — change the password in the IoCare app, then update
-  your config.
+- **Coway asks for a password change every 60 days.** Like the IoCare app, the
+  plugin answers "change next time" and carries on, logging a reminder. Set
+  `skipPasswordChange` to `false` to have it stop and report
+  `PasswordExpiredError` instead.
 - **Coway rate-limits logins,** blocking an account for roughly 24 hours after
-  repeated failures. The plugin is deliberately conservative here: it holds one
-  token pair for its lifetime, prefers refreshing over re-authenticating,
-  collapses concurrent callers onto a single login, and **stops permanently**
-  after a rate-limit response rather than retrying into a deeper block. If you
-  get blocked, wait it out and confirm the IoCare app itself still signs in.
-- **Polling costs several cloud requests per device per tick.** The 30-second
-  floor exists to protect your rate budget, not to be annoying.
+  repeated failures, and the block covers the IoCare app too. The plugin is
+  deliberately conservative here: it holds one token pair for its lifetime,
+  prefers refreshing over re-authenticating, collapses concurrent callers onto
+  a single login, and **stops until Homebridge restarts** after a rate-limit
+  response or a rejected password, rather than retrying into a block. Fix the
+  password or wait out the block, then restart Homebridge.
+- **Polling costs several cloud requests per device per tick.** Filter life is
+  read at most every 30 minutes, and the 30-second poll floor exists to protect
+  your rate budget.
 
 ## Troubleshooting
 
@@ -178,6 +192,11 @@ Read this section before opening an issue about login failures.
 If your other plugins run as child bridges, this one goes onto the *main*
 Homebridge bridge, which you may not have paired. Either pair the main bridge or
 give this platform its own `_bridge` block.
+
+**`Poll failed … (3 in a row)`.** Coway has been unreachable for three polls.
+The plugin keeps polling, repeats the warning every 30 failures, and logs when
+Coway is reachable again. Startup discovery likewise retries with a growing
+delay, so a Coway outage at boot does not need a restart.
 
 **`No status payload found in the IoCare page`.** Either the session expired
 (the plugin will recover on the next poll) or Coway changed the webview format
@@ -188,7 +207,8 @@ reports filter life directly; if you have already replaced them, reset the
 counter in the IoCare app.
 
 **`Coway rejected the username or password`.** See the account section above —
-social login and the 60-day password expiry are the two usual causes.
+social login and an outdated password are the usual causes. The plugin stops
+trying after this, so correct the config and restart Homebridge.
 
 ## Development
 
@@ -199,9 +219,10 @@ npm run lint
 npm run build
 ```
 
-`src/purifierState.ts` holds the pure decoding and HomeKit mapping and carries
-most of the test coverage. The network layer is kept deliberately thin, so the
-logic worth testing does not require mocking HTTP.
+`src/purifierState.ts` holds the pure decoding and HomeKit mapping, and
+`src/models.ts` the per-model capabilities. The client, platform and accessory
+tests stub `fetch` and drive HAP-NodeJS directly, so login, retry, discovery and
+command behaviour are covered without a Coway account.
 
 ## Credit
 

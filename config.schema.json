@@ -14,9 +14,8 @@
         "required": true
       },
       "username": {
-        "title": "IoCare Email",
+        "title": "IoCare Email or Phone",
         "type": "string",
-        "format": "email",
         "required": true
       },
       "password": {

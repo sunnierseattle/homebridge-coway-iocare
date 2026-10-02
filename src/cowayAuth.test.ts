@@ -100,7 +100,10 @@ describe('login', () => {
       .mockResolvedValueOnce(tokenResponse);
     vi.stubGlobal('fetch', fetch);
 
-    await expect(login('u', 'p', { skipPasswordChange: true })).resolves.toMatchObject({ accessToken: 'a' });
+    const onPasswordChangeDeferred = vi.fn();
+    await expect(login('u', 'p', { skipPasswordChange: true, onPasswordChangeDeferred }))
+      .resolves.toMatchObject({ accessToken: 'a' });
+    expect(onPasswordChangeDeferred).toHaveBeenCalledTimes(1);
 
     const [url, init] = fetch.mock.calls[2];
     expect(url).toBe('https://id.coway.com/login-actions/required-action?s=9');
