@@ -9,6 +9,7 @@ import {
 import { Attr, Mode } from './settings.js';
 
 const FAILURES_BEFORE_WARNING = 3;
+const FILTER_CHANGE_BELOW_PCT = 10;
 /** Once warned, repeat at this many consecutive failures (about every 30 minutes at 60s). */
 const WARNING_REPEAT_EVERY = 30;
 
@@ -77,7 +78,7 @@ export class AirmegaAccessory {
       });
 
     this.purifier.getCharacteristic(Characteristic.RotationSpeed)
-      .setProps({ minStep: 33 })
+      .setProps({ minStep: 100 / 3 }) // one step per fan speed; 33 would cap at 99
       .onGet(() => this.read((s) => toRotationSpeed(s.fanSpeed), 0))
       .onSet((v) => this.sendAll(commandsFor.speed(this.state?.isOn ?? false, Number(v))));
 
@@ -254,6 +255,8 @@ export class AirmegaAccessory {
     const { Characteristic } = this.platform;
     const svc = this.filterService(label, subtype);
     svc.updateCharacteristic(Characteristic.FilterLifeLevel, pct);
-    svc.updateCharacteristic(Characteristic.FilterChangeIndication, pct <= 0 ? 1 : 0);
+    // Alerting at 0% would only report a filter already spent.
+    svc.updateCharacteristic(
+      Characteristic.FilterChangeIndication, pct < FILTER_CHANGE_BELOW_PCT ? 1 : 0);
   }
 }

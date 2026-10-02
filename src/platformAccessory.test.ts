@@ -96,3 +96,22 @@ describe('AirmegaAccessory polling', () => {
     await expect(active.handleGetRequest()).resolves.toBe(1);
   });
 });
+
+describe('AirmegaAccessory readings', () => {
+  it('shows the top fan speed as 100%, not 99%', async () => {
+    const { airmega, purifier } = makeAccessory({ readState: () => Promise.resolve(state({ fanSpeed: 3 })) });
+    await airmega.refresh();
+    expect(purifier.getCharacteristic(hap.Characteristic.RotationSpeed).value).toBe(100);
+  });
+
+  it.each([{ pct: 9, indication: 1 }, { pct: 10, indication: 0 }, { pct: 50, indication: 0 }])(
+    'asks for a filter change below 10% life left ($pct% -> $indication)',
+    async ({ pct, indication }) => {
+      const { airmega, accessory } = makeAccessory({
+        readState: () => Promise.resolve(state({ preFilterPct: pct })),
+      });
+      await airmega.refresh();
+      const filter = accessory.getServiceById(hap.Service.FilterMaintenance, 'pre-filter')!;
+      expect(filter.getCharacteristic(hap.Characteristic.FilterChangeIndication).value).toBe(indication);
+    });
+});
