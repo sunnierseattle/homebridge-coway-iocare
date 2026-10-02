@@ -53,3 +53,6 @@ export const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 /** Default seconds between cloud polls. Each poll is several HTTPS round-trips. */
 export const DEFAULT_POLL_INTERVAL_S = 60;
 export const MIN_POLL_INTERVAL_S = 30;
+
+/** Ceiling for the backoff between failed device discoveries at startup. */
+export const MAX_DISCOVERY_RETRY_S = 15 * 60;
