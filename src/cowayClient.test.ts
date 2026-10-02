@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CowayClient } from './cowayClient.js';
 import { CowayAuthError, PasswordExpiredError, RateLimitedError } from './errors.js';
@@ -105,5 +105,96 @@ describe('CowayClient login options', () => {
     const client = new CowayClient('u', 'p', { login }, { skipPasswordChange: true });
     await client.accessToken();
     expect(login).toHaveBeenCalledWith('u', 'p', { skipPasswordChange: true });
+  });
+});
+
+describe('CowayClient requests', () => {
+  const device = {
+    deviceSerial: 'S1', nickname: 'Bedroom', placeId: 'P1', modelCode: 'M', productModel: 'AP-2015E',
+  };
+  const json = (status: number, body: unknown = {}) => ({
+    ok: status >= 200 && status < 300, status, json: async () => body,
+  });
+
+  function makeRequestClient() {
+    const deps = {
+      login: vi.fn().mockResolvedValue(tokens(60 * 60 * 1000)),
+      refresh: vi.fn().mockResolvedValue({ ...tokens(60 * 60 * 1000), accessToken: 'fresh' }),
+      sleep: vi.fn().mockResolvedValue(undefined),
+    };
+    return { client: new CowayClient('u', 'p', deps), deps };
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('refreshes the session and retries once when Coway rejects the token early', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(json(401))
+      .mockResolvedValueOnce(json(200));
+    vi.stubGlobal('fetch', fetch);
+    const { client, deps } = makeRequestClient();
+
+    await client.control(device, '0001', '1');
+
+    expect(deps.refresh).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[1][1].headers.authorization).toBe('Bearer fresh');
+  });
+
+  it('retries a server error with backoff, then succeeds', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(json(503))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(json(200)));
+    const { client, deps } = makeRequestClient();
+
+    await client.control(device, '0001', '1');
+
+    expect(deps.sleep).toHaveBeenCalledTimes(2);
+    expect(deps.sleep.mock.calls[1][0]).toBeGreaterThan(deps.sleep.mock.calls[0][0]);
+  });
+
+  it('gives up after a bounded number of retries', async () => {
+    const fetch = vi.fn().mockResolvedValue(json(500));
+    vi.stubGlobal('fetch', fetch);
+    const { client } = makeRequestClient();
+
+    await expect(client.control(device, '0001', '1')).rejects.toThrow(/500/);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry a request Coway rejected outright', async () => {
+    const fetch = vi.fn().mockResolvedValue(json(400));
+    vi.stubGlobal('fetch', fetch);
+    const { client } = makeRequestClient();
+
+    await expect(client.control(device, '0001', '1')).rejects.toThrow(/400/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets a timeout on every request, so a hung connection cannot stall a poll', async () => {
+    const fetch = vi.fn().mockResolvedValue(json(200));
+    vi.stubGlobal('fetch', fetch);
+    const { client } = makeRequestClient();
+
+    await client.control(device, '0001', '1');
+
+    expect(fetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('reads filter supplies at most every 30 minutes, not on every poll', async () => {
+    vi.useFakeTimers();
+    const supplies = json(200, { data: { suppliesList: [{ supplyNm: 'Pre-Filter', filterRemain: 80 }] } });
+    const fetch = vi.fn().mockResolvedValue(supplies);
+    vi.stubGlobal('fetch', fetch);
+    const { client } = makeRequestClient();
+
+    expect(await client.fetchFilters(device)).toEqual([{ name: 'Pre-Filter', remainPct: 80 }]);
+    expect(await client.fetchFilters(device)).toEqual([{ name: 'Pre-Filter', remainPct: 80 }]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(30 * 60 * 1000 + 1);
+    await client.fetchFilters(device);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });

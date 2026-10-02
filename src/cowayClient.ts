@@ -31,10 +31,21 @@ export interface PurifierDevice {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Json = Record<string, any>;
 
-interface AuthDeps {
+interface ClientDeps {
   login: (u: string, p: string, options: LoginOptions) => Promise<Tokens>;
   refresh: (t: string) => Promise<Tokens>;
+  sleep: (ms: number) => Promise<void>;
 }
+
+/** A hung connection would otherwise stall the poll loop indefinitely. */
+const REQUEST_TIMEOUT_MS = 15_000;
+/** Retries after the first attempt, for server errors and dropped connections. */
+const MAX_RETRIES = 2;
+const RETRY_BASE_MS = 1_000;
+/** Filter life moves by days, not minutes; no need to ask on every poll. */
+const SUPPLIES_TTL_MS = 30 * 60 * 1000;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Talks to Coway IoCare, holding one token pair across the plugin's lifetime. */
 export class CowayClient {
@@ -47,15 +58,16 @@ export class CowayClient {
    * towards Coway's 24-hour lockout, so stop until Homebridge restarts.
    */
   private blocked?: Error;
-  private readonly deps: AuthDeps;
+  private readonly deps: ClientDeps;
+  private readonly supplies = new Map<string, { at: number; readings: FilterReading[] }>();
 
   constructor(
     private readonly username: string,
     private readonly password: string,
-    deps?: Partial<AuthDeps>,
+    deps?: Partial<ClientDeps>,
     private readonly loginOptions: LoginOptions = {},
   ) {
-    this.deps = { login: defaultLogin, refresh: defaultRefresh, ...deps };
+    this.deps = { login: defaultLogin, refresh: defaultRefresh, sleep, ...deps };
   }
 
   /** Return a usable access token, logging in or refreshing only when needed. */
@@ -101,19 +113,57 @@ export class CowayClient {
     }
   }
 
-  private async authHeaders(): Promise<Record<string, string>> {
+  private authHeaders(token: string): Record<string, string> {
     return {
       region: 'NUS',
       'content-type': 'application/json',
       accept: '*/*',
-      authorization: `Bearer ${await this.accessToken()}`,
+      authorization: `Bearer ${token}`,
       'accept-language': 'en-US,en;q=0.9',
       'user-agent': USER_AGENT,
     };
   }
 
+  /**
+   * fetch with a timeout, retrying server errors and dropped connections with
+   * exponential backoff. A 4xx is Coway's answer, not a fault, so it returns.
+   */
+  private async request(url: URL | string, init: RequestInit = {}): Promise<Response> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+        if (res.status < 500 || attempt >= MAX_RETRIES) {
+          return res;
+        }
+      } catch (err) {
+        if (attempt >= MAX_RETRIES) {
+          throw err;
+        }
+      }
+      await this.deps.sleep(RETRY_BASE_MS * 2 ** attempt);
+    }
+  }
+
+  /**
+   * A request carrying the access token. Coway can revoke a token before its
+   * stated expiry; on a 401, refresh it and try once more rather than failing
+   * every call until the local expiry passes.
+   */
+  private async authedRequest(
+    url: URL | string, init: (token: string) => RequestInit,
+  ): Promise<Response> {
+    const res = await this.request(url, init(await this.accessToken()));
+    if (res.status !== 401) {
+      return res;
+    }
+    if (this.tokens) {
+      this.tokens = { ...this.tokens, expiresAt: 0 };
+    }
+    return this.request(url, init(await this.accessToken()));
+  }
+
   private async getJson(url: URL | string): Promise<Json> {
-    const res = await fetch(url, { headers: await this.authHeaders() });
+    const res = await this.authedRequest(url, (token) => ({ headers: this.authHeaders(token) }));
     const body = (await res.json()) as Json;
     if (body?.data && 'maintainInfos' in (body.data as object)) {
       throw new ServerMaintenanceError('Coway servers are undergoing maintenance.');
@@ -169,13 +219,12 @@ export class CowayClient {
    * page the IoCare app renders in a webview and lifts the embedded payload.
    */
   async readState(device: PurifierDevice): Promise<PurifierState> {
-    const token = await this.accessToken();
     const url = new URL(`${Endpoint.WEBVIEW}/${device.placeId}/product/${device.modelCode}`);
     url.search = new URLSearchParams({
       bottomSlide: 'false', tab: '0', temperatureUnit: 'F', weightUnit: 'oz', gravityUnit: 'lb',
     }).toString();
 
-    const res = await fetch(url, {
+    const res = await this.authedRequest(url, (token) => ({
       headers: {
         theme: 'light',
         callingpage: 'product',
@@ -190,7 +239,7 @@ export class CowayClient {
         srcpath: 'iOS',
         deviceserial: device.deviceSerial,
       },
-    });
+    }));
     if (!res.ok) {
       throw new CowayError(`Coway status page returned ${res.status}.`);
     }
@@ -204,6 +253,10 @@ export class CowayClient {
    * falls back to the sensor attributes embedded in the status page.
    */
   async fetchFilters(device: PurifierDevice): Promise<FilterReading[]> {
+    const cached = this.supplies.get(device.deviceSerial);
+    if (cached && Date.now() - cached.at < SUPPLIES_TTL_MS) {
+      return cached.readings;
+    }
     const url = new URL(
       `${Endpoint.PROXY}/com/places/${device.placeId}/devices/${device.deviceSerial}/supplies`,
     );
@@ -214,12 +267,14 @@ export class CowayClient {
     try {
       const body = await this.getJson(url);
       const list = (body.data?.suppliesList ?? []) as Json[];
-      return list
+      const readings = list
         .filter((f) => typeof f.filterRemain === 'number')
         .map((f) => ({
           name: String(f.supplyNm ?? ''),
           remainPct: Number(f.filterRemain),
         }));
+      this.supplies.set(device.deviceSerial, { at: Date.now(), readings });
+      return readings;
     } catch {
       return [];
     }
@@ -228,15 +283,15 @@ export class CowayClient {
   /** Send one control attribute. Coway accepts a single attribute per call. */
   async control(device: PurifierDevice, attribute: string, value: string): Promise<void> {
     const url = `${Endpoint.BASE}/com/places/${device.placeId}/devices/${device.deviceSerial}/control-status`;
-    const res = await fetch(url, {
+    const res = await this.authedRequest(url, (token) => ({
       method: 'POST',
-      headers: await this.authHeaders(),
+      headers: this.authHeaders(token),
       body: JSON.stringify({
         attributes: { [attribute]: value },
         isMultiControl: false,
         refreshFlag: false,
       }),
-    });
+    }));
 
     const body = (await res.json().catch(() => ({}))) as { header?: { error_code?: string; error_text?: string } };
     const code = body.header?.error_code;
