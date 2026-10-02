@@ -126,7 +126,15 @@ export class AirmegaAccessory {
   }
 
   private async send(attribute: string, value: string): Promise<void> {
-    await this.client.control(this.device, attribute, value);
+    try {
+      await this.client.control(this.device, attribute, value);
+    } catch (err) {
+      // A plain error reaches HAP-NodeJS as an "unhandled error" with a stack
+      // trace; a HapStatusError shows the tile as No Response without one.
+      this.platform.log.error(`${this.device.nickname}: command failed: ${(err as Error).message}`);
+      const { HapStatusError, HAPStatus } = this.platform.api.hap;
+      throw new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
     if (!this.state) {
       return;
     }
