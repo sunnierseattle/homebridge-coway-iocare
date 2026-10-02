@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CowayClient } from './cowayClient.js';
-import { RateLimitedError } from './errors.js';
+import { CowayAuthError, PasswordExpiredError, RateLimitedError } from './errors.js';
 import { TOKEN_REFRESH_MARGIN_MS } from './settings.js';
 
 const tokens = (expiresInMs: number) => ({
@@ -62,6 +62,26 @@ describe('CowayClient token lifecycle', () => {
     expect(deps.login).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['rejected credentials', new CowayAuthError('bad password')],
+    ['a forced password change', new PasswordExpiredError('change it')],
+  ])('stops logging in after %s, since every retry counts towards a lockout', async (_, error) => {
+    const { client, deps } = makeClient({ login: vi.fn().mockRejectedValue(error) });
+    await expect(client.accessToken()).rejects.toBe(error);
+    await expect(client.accessToken()).rejects.toBe(error);
+    expect(deps.login).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps retrying a login that failed for a transient reason', async () => {
+    const { client } = makeClient({
+      login: vi.fn()
+        .mockRejectedValueOnce(new Error('socket hang up'))
+        .mockResolvedValue(tokens(60 * 60 * 1000)),
+    });
+    await expect(client.accessToken()).rejects.toThrow('socket hang up');
+    await expect(client.accessToken()).resolves.toBe('access');
+  });
+
   it('collapses concurrent callers onto a single login', async () => {
     let release: (v: unknown) => void = () => {};
     const gate = new Promise((r) => {
@@ -76,5 +96,14 @@ describe('CowayClient token lifecycle', () => {
     release(null);
     await all;
     expect(deps.login).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CowayClient login options', () => {
+  it('passes the password-change preference through to the login', async () => {
+    const login = vi.fn().mockResolvedValue(tokens(60 * 60 * 1000));
+    const client = new CowayClient('u', 'p', { login }, { skipPasswordChange: true });
+    await client.accessToken();
+    expect(login).toHaveBeenCalledWith('u', 'p', { skipPasswordChange: true });
   });
 });

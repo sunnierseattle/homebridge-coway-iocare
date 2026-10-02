@@ -3,7 +3,7 @@
   "pluginType": "platform",
   "singular": true,
   "headerDisplay": "Controls WiFi-connected Coway Airmega purifiers through the IoCare cloud. Coway offers no local API, so an IoCare account is required.",
-  "footerDisplay": "Accounts that sign in with Google or Apple cannot be used \u2014 the plugin needs an email/password login. Coway also forces a password change every 60 days.",
+  "footerDisplay": "Accounts that sign in with Google or Apple cannot be used — the plugin needs an email/password login.",
   "schema": {
     "type": "object",
     "properties": {
@@ -26,6 +26,12 @@
         "x-schema-form": {
           "type": "password"
         }
+      },
+      "skipPasswordChange": {
+        "title": "Defer Coway's 60-day password change",
+        "type": "boolean",
+        "default": true,
+        "description": "Coway asks for a new password every 60 days and blocks sign-in until it is changed. When on, the plugin answers \"change next time\", as the IoCare app lets you do. Turn off to have the plugin stop and report it instead."
       },
       "pollIntervalSeconds": {
         "title": "Poll Interval (seconds)",

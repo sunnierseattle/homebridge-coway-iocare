@@ -1,5 +1,9 @@
-import { login as defaultLogin, refresh as defaultRefresh, type Tokens } from './cowayAuth.js';
-import { CowayError, RateLimitedError, ServerMaintenanceError } from './errors.js';
+import {
+  login as defaultLogin, refresh as defaultRefresh, type LoginOptions, type Tokens,
+} from './cowayAuth.js';
+import {
+  CowayAuthError, CowayError, PasswordExpiredError, RateLimitedError, ServerMaintenanceError,
+} from './errors.js';
 import {
   extractStatusPayload, parsePurifierState, type FilterReading, type PurifierState,
 } from './purifierState.js';
@@ -28,7 +32,7 @@ export interface PurifierDevice {
 type Json = Record<string, any>;
 
 interface AuthDeps {
-  login: (u: string, p: string) => Promise<Tokens>;
+  login: (u: string, p: string, options: LoginOptions) => Promise<Tokens>;
   refresh: (t: string) => Promise<Tokens>;
 }
 
@@ -37,7 +41,11 @@ export class CowayClient {
   private tokens?: Tokens;
   /** In-flight auth, so concurrent accessors share one login instead of racing. */
   private pending?: Promise<string>;
-  /** Set once we are rate-limited; further attempts would extend the block. */
+  /**
+   * Set once Coway rate-limits us or rejects the credentials. Either way another
+   * login cannot succeed until the user acts, and every failed attempt counts
+   * towards Coway's 24-hour lockout, so stop until Homebridge restarts.
+   */
   private blocked?: Error;
   private readonly deps: AuthDeps;
 
@@ -45,6 +53,7 @@ export class CowayClient {
     private readonly username: string,
     private readonly password: string,
     deps?: Partial<AuthDeps>,
+    private readonly loginOptions: LoginOptions = {},
   ) {
     this.deps = { login: defaultLogin, refresh: defaultRefresh, ...deps };
   }
@@ -81,10 +90,11 @@ export class CowayClient {
           this.tokens = undefined;
         }
       }
-      this.tokens = await this.deps.login(this.username, this.password);
+      this.tokens = await this.deps.login(this.username, this.password, this.loginOptions);
       return this.tokens.accessToken;
     } catch (err) {
-      if (err instanceof RateLimitedError) {
+      if (err instanceof RateLimitedError || err instanceof CowayAuthError
+        || err instanceof PasswordExpiredError) {
         this.blocked = err;
       }
       throw err;

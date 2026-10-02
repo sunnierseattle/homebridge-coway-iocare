@@ -10,6 +10,7 @@ import { DEFAULT_POLL_INTERVAL_S, MIN_POLL_INTERVAL_S, PLATFORM_NAME, PLUGIN_NAM
 interface CowayConfig extends PlatformConfig {
   username?: string;
   password?: string;
+  skipPasswordChange?: boolean;
   pollIntervalSeconds?: number;
   exposeLight?: boolean;
   exposeModeSwitches?: boolean;
@@ -43,7 +44,9 @@ export class CowayPlatform implements DynamicPlatformPlugin {
       this.log.error('No Coway IoCare username/password configured; the platform will stay idle.');
       return;
     }
-    this.client = new CowayClient(config.username, config.password);
+    this.client = new CowayClient(config.username, config.password, undefined, {
+      skipPasswordChange: config.skipPasswordChange ?? true,
+    });
 
     api.on('didFinishLaunching', () => void this.discover());
     api.on('shutdown', () => clearInterval(this.timer));

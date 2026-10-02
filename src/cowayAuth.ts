@@ -53,13 +53,22 @@ export function findFormAction(html: string, formId: string): string | null {
   return null;
 }
 
+/** Coway's 60-day policy interrupts the login with this page. */
+function isPasswordChangePage(html: string): boolean {
+  const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? '').trim();
+  return title === 'Coway - Password change message';
+}
+
+function isHtml(res: Response): boolean {
+  return (res.headers.get('content-type') ?? '').includes('text/html');
+}
+
 /**
  * Coway returns login failures as a rendered page, not an HTTP error, so the
  * body has to be inspected before we look for an auth code.
  */
 export function detectLoginProblem(html: string): void {
-  const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? '').trim();
-  if (title === 'Coway - Password change message') {
+  if (isPasswordChangePage(html)) {
     throw new PasswordExpiredError(
       'Coway is demanding a password change (its 60-day policy). Log in to the IoCare app, ' +
         'change the password, then update this plugin\'s configuration.',
@@ -68,6 +77,15 @@ export function detectLoginProblem(html: string): void {
   if (/Your ID or password is incorrect/i.test(html)) {
     throw new CowayAuthError('Coway rejected the username or password.');
   }
+}
+
+export interface LoginOptions {
+  /**
+   * Answer Coway's 60-day password-change page with "change next time", as the
+   * IoCare app lets a person do. Otherwise the plugin stops working until the
+   * password is changed.
+   */
+  skipPasswordChange?: boolean;
 }
 
 async function exchange(body: Record<string, string>, path: string): Promise<Tokens> {
@@ -105,7 +123,9 @@ async function exchange(body: Record<string, string>, path: string): Promise<Tok
 }
 
 /** Perform the full OAuth login and return a fresh token pair. */
-export async function login(username: string, password: string): Promise<Tokens> {
+export async function login(
+  username: string, password: string, options: LoginOptions = {},
+): Promise<Tokens> {
   const jar = new CookieJar();
 
   const authUrl = new URL(Endpoint.OAUTH);
@@ -152,11 +172,40 @@ export async function login(username: string, password: string): Promise<Tokens>
     redirect: 'follow',
   });
 
-  if ((submitRes.headers.get('content-type') ?? '').includes('text/html')) {
-    detectLoginProblem(await submitRes.clone().text());
+  let finalRes = submitRes;
+  if (isHtml(submitRes)) {
+    const html = await submitRes.clone().text();
+    const skipUrl = options.skipPasswordChange && isPasswordChangePage(html)
+      ? findFormAction(html, 'kc-password-change-form')
+      : null;
+    if (skipUrl) {
+      jar.absorb(submitRes);
+      // The same form the IoCare app submits for "change next time". The field
+      // set matches cowayaio's and homebridge-airmega-iocare's.
+      finalRes = await fetch(skipUrl, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'user-agent': USER_AGENT,
+          cookie: jar.header(),
+        },
+        body: new URLSearchParams({
+          cmd: 'change_next_time',
+          checkPasswordNeededYn: 'Y',
+          current_password: '',
+          new_password: '',
+          new_password_confirm: '',
+        }),
+        redirect: 'follow',
+      });
+    }
+    // Checked again after a deferral, so a second demand fails rather than loops.
+    if (isHtml(finalRes)) {
+      detectLoginProblem(await finalRes.clone().text());
+    }
   }
 
-  const code = new URL(submitRes.url).searchParams.get('code');
+  const code = new URL(finalRes.url).searchParams.get('code');
   if (!code) {
     throw new CowayAuthError(
       'Coway completed the login form but returned no authorization code. ' +
