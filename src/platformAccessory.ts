@@ -8,6 +8,10 @@ import {
 } from './purifierState.js';
 import { Attr, Mode } from './settings.js';
 
+const FAILURES_BEFORE_WARNING = 3;
+/** Once warned, repeat at this many consecutive failures (about every 30 minutes at 60s). */
+const WARNING_REPEAT_EVERY = 30;
+
 /** The optional mode switches, and the attribute value each selects. */
 const MODE_SWITCHES = [
   { key: 'night', label: 'Night Mode', value: Mode.NIGHT, flag: 'nightMode' },
@@ -33,6 +37,8 @@ export class AirmegaAccessory {
 
   private state?: PurifierState;
   private lightConvention: LightConvention;
+  /** Consecutive failed polls, so a run of them is reported once, not every minute. */
+  private failures = 0;
 
   constructor(
     private readonly platform: CowayPlatform,
@@ -115,7 +121,17 @@ export class AirmegaAccessory {
   }
 
   private read<T extends CharacteristicValue>(pick: (s: PurifierState) => T, fallback: T): T {
+    if (this.state && !this.state.online) {
+      // The cloud still answers with the purifier's last state; showing it as
+      // live would hide that the unit is unplugged or off WiFi.
+      throw this.noResponse();
+    }
     return this.state ? pick(this.state) : fallback;
+  }
+
+  private noResponse() {
+    const { HapStatusError, HAPStatus } = this.platform.api.hap;
+    return new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
   /** Apply commands in order; Coway accepts only one attribute per call. */
@@ -175,6 +191,15 @@ export class AirmegaAccessory {
       // Hold the last value set, or the toggle snaps back to unlocked every poll.
       s.buttonLock ??= this.accessory.context.buttonLock ?? false;
       this.state = s;
+      if (this.failures >= FAILURES_BEFORE_WARNING) {
+        this.platform.log.info(`${this.device.nickname}: Coway is reachable again.`);
+      }
+      this.failures = 0;
+
+      if (!s.online) {
+        this.purifier.updateCharacteristic(Characteristic.Active, this.noResponse());
+        return;
+      }
 
       // A value only the enum convention can produce settles the ambiguity.
       const detected = detectLightConvention(s.lightRaw);
@@ -210,7 +235,15 @@ export class AirmegaAccessory {
         this.modeSwitches.get(m.key)?.updateCharacteristic(Characteristic.On, Boolean(s[m.flag]));
       }
     } catch (err) {
-      this.platform.log.debug(`Poll failed for ${this.device.nickname}: ${(err as Error).message}`);
+      // One failure is usually a blip; a run of them means the user should know.
+      this.failures++;
+      const message = `Poll failed for ${this.device.nickname}: ${(err as Error).message}`;
+      if (this.failures === FAILURES_BEFORE_WARNING
+        || (this.failures > FAILURES_BEFORE_WARNING && this.failures % WARNING_REPEAT_EVERY === 0)) {
+        this.platform.log.warn(`${message} (${this.failures} in a row)`);
+      } else {
+        this.platform.log.debug(message);
+      }
     }
   }
 
