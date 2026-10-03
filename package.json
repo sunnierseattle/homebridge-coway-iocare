@@ -12,6 +12,7 @@
   },
   "keywords": [
     "homebridge-plugin",
+    "supports-hap",
     "coway",
     "airmega",
     "iocare",

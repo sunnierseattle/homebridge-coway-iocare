@@ -6,22 +6,24 @@
   "footerDisplay": "Accounts that sign in with Google or Apple cannot be used — the plugin needs an email/password login.",
   "schema": {
     "type": "object",
+    "required": [
+      "name",
+      "username",
+      "password"
+    ],
     "properties": {
       "name": {
         "title": "Name",
         "type": "string",
-        "default": "Coway Airmega",
-        "required": true
+        "default": "Coway Airmega"
       },
       "username": {
         "title": "IoCare Email or Phone",
-        "type": "string",
-        "required": true
+        "type": "string"
       },
       "password": {
         "title": "IoCare Password",
         "type": "string",
-        "required": true,
         "x-schema-form": {
           "type": "password"
         }
