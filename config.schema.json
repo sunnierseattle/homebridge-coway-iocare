@@ -51,7 +51,7 @@
         "title": "Expose Night / Rapid / Eco modes as switches",
         "type": "boolean",
         "default": false,
-        "description": "HomeKit's air purifier has only Auto and Manual. These switches reach the modes it cannot express. Only the modes your model supports are shown: Night on most models, Rapid on the 250S, Eco on the AP-1512HHS. Unrecognised models get all three."
+        "description": "HomeKit's air purifier has only Auto and Manual. Night (Sleep) is already the speed slider's lowest step; these switches give each mode a name in Home and an automation trigger, and reach Rapid and Eco. Only the modes your model supports are shown: Night on most models, Rapid on the 250S, Eco on the AP-1512HHS. Unrecognised models get all three."
       },
       "lightConvention": {
         "title": "Light Convention",

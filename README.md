@@ -59,9 +59,10 @@ one. If you own one of these, please report back.
   code; an unrecognised model starts on the 400S convention and switches if it
   ever sees a `1` or `3`, which only the enum convention produces.
   `lightConvention` overrides all of it.
-- **Modes.** HomeKit's air purifier has only Auto and Manual. Night, Rapid and
-  Eco are always *reported*; setting them needs `exposeModeSwitches`, which
-  offers only the modes the device lists as accepted (falling back to the
+- **Modes.** HomeKit's air purifier has only Auto and Manual. Night (Sleep) is
+  on the speed slider; Night, Rapid and Eco are always *reported*, and switches
+  for them come with `exposeModeSwitches`, which offers only the modes the
+  device lists as accepted (falling back to the
   product name, then the model code). An unrecognised model gets all three.
   What the device declared is remembered, so a restart starts from it.
 
@@ -97,7 +98,7 @@ and the fix lives in `src/purifierState.ts`.
 | **Air Quality Sensor** | Air Quality, PM10 Density, PM2.5 Density *(only on models that report it)* |
 | **Filter Maintenance** ×2–3 | Filter Life Level and Filter Change Indication. Pre-filter and Max2 on all models; a third odor filter on UK/EU models. Each appears only if the device reports it. |
 | **Lightbulb** | The panel light — optional, disabled by default |
-| **Switch** ×1–3 | Night / Rapid / Eco, whichever the model supports — optional, disabled by default. HomeKit's air purifier cannot express these. |
+| **Switch** ×1–3 | Night / Rapid / Eco, whichever the model supports — optional, disabled by default. Night is also the slider's lowest step; the switch gives it a name and an automation trigger. |
 
 Each extra tile is named after its function ("Bedroom Pre-Filter"), and a name
 you change in the Home app is kept. The purifier's firmware version appears in
@@ -108,16 +109,21 @@ rather than its last known state.
 
 Coway's hardware and HomeKit's model do not line up exactly. Where they diverge:
 
-- **Fan speed.** The hardware has three steps, so the HomeKit slider snaps to
-  33 / 67 / 100. Dragging the slider sends one command once it settles, rather
-  than one per step. Dragging to 0 powers the unit off. Setting any other speed on a
+- **Fan speed.** The slider follows the 400S panel's airflow ladder and snaps
+  to four steps: **25% Sleep**, 50% Low, 75% Medium, 100% High. Coway treats
+  Sleep as a mode rather than a fan level, so the lowest step selects it and any
+  higher step leaves it. Scenes saved before v1.4 still work: their 33% and 67%
+  arrive as Low and Medium. Dragging the slider sends one command once it
+  settles, rather than one per step. Dragging to 0 powers the unit off. Setting any other speed on a
   unit that is off powers it on first — Coway silently ignores a fan command
   sent to a powered-off purifier, which otherwise makes the slider look broken.
   Selecting a mode behaves the same way.
 - **Modes.** HomeKit's `TargetAirPurifierState` offers only AUTO and MANUAL.
   Coway's *auto* and *eco* both report as AUTO; *night* and *rapid* report as
-  MANUAL. Enable `exposeModeSwitches` to select them directly. Night mode
-  reports no fan speed, so it shows as the lowest step (33%).
+  MANUAL. Choosing Manual while asleep keeps Sleep. `exposeModeSwitches` adds a
+  named switch per mode, useful as an automation trigger: turning the Night
+  switch off steps up to Low, and turning Rapid or Eco off returns to Auto,
+  since Coway has no command to leave a mode.
 - **Physical-controls lock.** Some models (the 400S) obey the lock command but
   never report lock state. There the plugin shows the last value set from
   HomeKit, so a lock applied on the unit itself is not reflected.
