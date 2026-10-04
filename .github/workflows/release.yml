@@ -1,5 +1,6 @@
 # Publish to npm and create the GitHub release when a version tag is pushed.
-# Release with: npm version patch && git push --follow-tags
+# Release with: add a "## vX.Y.Z — Title" section to CHANGELOG.md, commit it, then
+#   npm version patch && git push --follow-tags
 #
 # npm authenticates through trusted publishing (OIDC), so no token is stored
 # here. The trusted publisher on npmjs.com must name this file: release.yml.
@@ -37,6 +38,14 @@ jobs:
             exit 1
           fi
 
+      # Before anything is published: a version with no CHANGELOG.md section
+      # stops here, so npm and GitHub never get a release without notes.
+      - name: Require release notes
+        run: |
+          sh scripts/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+          sh scripts/release-notes.sh "$GITHUB_REF_NAME" --title > "$RUNNER_TEMP/title.txt"
+          echo "Release notes for $GITHUB_REF_NAME: $(cat "$RUNNER_TEMP/title.txt")"
+
       - run: npm ci
       - run: npm test
 
@@ -60,5 +69,6 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME already exists; skipping."
           else
-            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+            gh release create "$GITHUB_REF_NAME" --verify-tag \
+              --title "$(cat "$RUNNER_TEMP/title.txt")" --notes-file "$RUNNER_TEMP/notes.md"
           fi

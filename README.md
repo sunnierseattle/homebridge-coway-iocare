@@ -234,6 +234,16 @@ npm run build
 tests stub `fetch` and drive HAP-NodeJS directly, so login, retry, discovery and
 command behaviour are covered without a Coway account.
 
+## Releasing
+
+Every release needs notes. Add a section to `CHANGELOG.md` headed
+`## vX.Y.Z — Short title`, commit it, then run `npm version patch` (or `minor`,
+`major`) and `git push --follow-tags`. `npm version` refuses to tag a version
+without its section, and the release workflow checks again before publishing:
+the section becomes the GitHub release that the Homebridge UI shows. If
+`npm version` stops for missing notes, run
+`git checkout package.json package-lock.json`, add the section, and retry.
+
 ## Credit
 
 The IoCare authentication and control protocol was reverse-engineered by
