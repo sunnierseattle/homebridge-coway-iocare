@@ -6,6 +6,7 @@ import {
   toAirQuality,
   toRotationSpeed,
   fromRotationSpeed,
+  speedStep,
   isLightOn,
   lightCommand,
   detectLightConvention,
@@ -186,11 +187,9 @@ describe('parsePurifierState', () => {
     expect(s.buttonLock).toBe(true);
   });
 
-  it('reports night mode as the lowest fan step, not as speed 0', () => {
-    // Coway reports fan 0 in night mode; 0% would read as "on but not running".
-    expect(parsePurifierState(base).fanSpeed).toBe(1);
-    // Off stays 0, and a real speed in another mode passes through.
-    expect(parsePurifierState({ ...base, status: { ...base.status, '0001': 0 } }).fanSpeed).toBe(0);
+  it('reports the raw fan level, leaving night mode to its own flag', () => {
+    // Coway reports fan 0 in night mode; speedStep, not the parser, places it.
+    expect(parsePurifierState(base)).toMatchObject({ fanSpeed: 0, nightMode: true });
     expect(parsePurifierState({ ...base, status: { ...base.status, '0002': 0, '0003': 3 } }).fanSpeed).toBe(3);
   });
 
@@ -222,24 +221,37 @@ describe('parsePurifierState', () => {
   });
 });
 
-describe('toRotationSpeed / fromRotationSpeed', () => {
-  it('maps the three Coway fan steps onto evenly spaced HomeKit percentages', () => {
-    expect(toRotationSpeed(0)).toBe(0);
-    expect(toRotationSpeed(1)).toBe(33);
-    expect(toRotationSpeed(2)).toBe(67);
-    expect(toRotationSpeed(3)).toBe(100);
+describe('speed steps: Sleep, Low, Medium, High', () => {
+  const st = (o: Partial<{ nightMode: boolean; fanSpeed: number }>) => ({ nightMode: false, fanSpeed: 0, ...o });
+
+  it('places Sleep below the three fan speeds, as the 400S panel does', () => {
+    expect(speedStep(st({ nightMode: true }))).toBe(1);
+    expect(speedStep(st({ fanSpeed: 1 }))).toBe(2);
+    expect(speedStep(st({ fanSpeed: 2 }))).toBe(3);
+    expect(speedStep(st({ fanSpeed: 3 }))).toBe(4);
+    expect(speedStep(st({}))).toBe(0);
+  });
+
+  it('spreads the four steps evenly across the HomeKit slider', () => {
+    expect([0, 1, 2, 3, 4].map(toRotationSpeed)).toEqual([0, 25, 50, 75, 100]);
   });
 
   it('round-trips every step', () => {
-    for (const step of [1, 2, 3]) {
-      expect(fromRotationSpeed(toRotationSpeed(step))).toBe(String(step));
+    for (const step of [1, 2, 3, 4]) {
+      expect(fromRotationSpeed(toRotationSpeed(step))).toBe(step);
     }
   });
 
-  it('snaps arbitrary slider positions to the nearest real step', () => {
-    expect(fromRotationSpeed(1)).toBe('1');
-    expect(fromRotationSpeed(50)).toBe('2');
-    expect(fromRotationSpeed(90)).toBe('3');
+  it('keeps scenes saved with the old three-step slider on the speed they meant', () => {
+    // HAP hands SET handlers the raw value, so a scene saved at 33% or 67%
+    // still arrives as 33 or 67: those must stay Low and Medium, not Sleep.
+    expect(fromRotationSpeed(33)).toBe(2);
+    expect(fromRotationSpeed(66.667)).toBe(3);
+    expect(fromRotationSpeed(67)).toBe(3);
+  });
+
+  it('snaps any other position to a step, and 0 to off', () => {
+    expect([0, 1, 30, 31, 55, 56, 80, 81, 100].map(fromRotationSpeed)).toEqual([0, 1, 1, 2, 2, 3, 3, 4, 4]);
   });
 });
 
@@ -335,6 +347,15 @@ describe('commandsFor — powering on implicitly', () => {
     expect(commandsFor.speed(false, 100)).toEqual([
       { attribute: '0001', value: '1' },
       { attribute: '0003', value: '3' },
+    ]);
+  });
+
+  it('selects Sleep through the mode attribute, since it is not a fan speed', () => {
+    // Verified on a 400S: mode 2 enters Sleep; a fan command leaves it.
+    expect(commandsFor.speed(true, 25)).toEqual([{ attribute: '0002', value: '2' }]);
+    expect(commandsFor.speed(false, 25)).toEqual([
+      { attribute: '0001', value: '1' },
+      { attribute: '0002', value: '2' },
     ]);
   });
 

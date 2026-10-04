@@ -304,10 +304,8 @@ export function parsePurifierState(
     nightMode: String(mode) === Mode.NIGHT,
     rapidMode: String(mode) === Mode.RAPID,
     ecoMode: String(mode) === Mode.ECO,
-    // Night mode runs the fan at its quietest but reports speed 0, which HomeKit
-    // would show as "on at 0%". Report it as the lowest step instead.
-    fanSpeed: (status[Attr.FAN_SPEED] ?? 0)
-      || (status[Attr.POWER] === 1 && String(mode) === Mode.NIGHT ? 1 : 0),
+    // Raw level: 0 in night mode, which speedStep places as Sleep.
+    fanSpeed: status[Attr.FAN_SPEED] ?? 0,
     lightRaw: status[Attr.LIGHT],
     buttonLock: status[Attr.LOCK] === undefined ? undefined : status[Attr.LOCK] === 1,
     online: network.wifiConnected !== false,
@@ -321,18 +319,40 @@ export function parsePurifierState(
   };
 }
 
-/** Coway's three fan steps, spread across HomeKit's 0-100 slider. */
-export function toRotationSpeed(step: number): number {
-  if (step <= 0) {
-    return 0;
+/**
+ * The 400S panel offers one airflow ladder, Sleep then Low, Medium and High
+ * (its manual: "select the air speed or Sleep mode"), so the HomeKit slider
+ * does too: steps 1-4, with 0 for off. Coway models Sleep as a mode (2) that
+ * reports fan 0, not as a fan level, which is why it needs placing here.
+ */
+export function speedStep(s: Pick<PurifierState, 'nightMode' | 'fanSpeed'>): number {
+  if (s.nightMode) {
+    return 1;
   }
-  return Math.min(100, Math.round((step / 3) * 100));
+  return s.fanSpeed > 0 ? Math.min(s.fanSpeed, 3) + 1 : 0;
 }
 
-/** Snap a HomeKit slider position back onto the nearest real fan step. */
-export function fromRotationSpeed(percent: number): string {
-  const step = Math.min(3, Math.max(1, Math.round((percent / 100) * 3)));
-  return String(step);
+/** A speed step as a HomeKit slider position: 25, 50, 75 or 100. */
+export function toRotationSpeed(step: number): number {
+  return Math.max(0, Math.min(4, step)) * 25;
+}
+
+/**
+ * Snap a slider value to a step. HAP passes a SET handler the raw value, so
+ * scenes saved under the old three-step slider still send 33 and 67; the
+ * boundaries keep those on Low and Medium instead of rounding 33 down to Sleep.
+ */
+export function fromRotationSpeed(percent: number): number {
+  if (percent <= 0) {
+    return 0;
+  }
+  if (percent <= 30) {
+    return 1;
+  }
+  if (percent <= 55) {
+    return 2;
+  }
+  return percent <= 80 ? 3 : 4;
 }
 
 /**
@@ -394,14 +414,18 @@ export interface Command {
  */
 export const commandsFor = {
   speed(isOn: boolean, percent: number): Command[] {
-    if (percent <= 0) {
+    const step = fromRotationSpeed(percent);
+    if (step === 0) {
       return [{ attribute: Attr.POWER, value: '0' }];
     }
     const cmds: Command[] = [];
     if (!isOn) {
       cmds.push({ attribute: Attr.POWER, value: '1' });
     }
-    cmds.push({ attribute: Attr.FAN_SPEED, value: fromRotationSpeed(percent) });
+    // Sleep is a mode, not a fan level; a fan command is what leaves it.
+    cmds.push(step === 1
+      ? { attribute: Attr.MODE, value: Mode.NIGHT }
+      : { attribute: Attr.FAN_SPEED, value: String(step - 1) });
     return cmds;
   },
 

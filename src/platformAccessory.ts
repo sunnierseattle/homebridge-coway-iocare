@@ -4,7 +4,7 @@ import type { CowayClient, PurifierDevice } from './cowayClient.js';
 import { profileFor } from './models.js';
 import type { CowayPlatform } from './platform.js';
 import {
-  commandsFor, detectLightConvention, isLightOn, lightCommand, toAirQuality, toRotationSpeed,
+  commandsFor, detectLightConvention, isLightOn, lightCommand, speedStep, toAirQuality, toRotationSpeed,
   type Command, type DeviceCapabilities, type LightConvention, type PurifierState,
 } from './purifierState.js';
 import { Attr, Mode } from './settings.js';
@@ -86,14 +86,14 @@ export class AirmegaAccessory {
         return v === 1
           ? this.sendAll(commandsFor.mode(isOn, Mode.AUTO))
           // Leaving auto has no direct command; selecting a speed is what puts
-          // the unit into manual, so re-assert the current one. A reported speed
-          // of 0 must not pass through: speed 0 means power off.
-          : this.sendAll(commandsFor.speed(isOn, toRotationSpeed(this.state?.fanSpeed || 1)));
+          // the unit into manual, so re-assert the current step (Sleep stays
+          // Sleep). With no step to keep, use Low: step 0 would mean power off.
+          : this.sendAll(commandsFor.speed(isOn, toRotationSpeed(this.currentStep() || 2)));
       });
 
     this.purifier.getCharacteristic(Characteristic.RotationSpeed)
-      .setProps({ minStep: 100 / 3 }) // one step per fan speed; 33 would cap at 99
-      .onGet(() => this.read((s) => toRotationSpeed(s.fanSpeed), 0))
+      .setProps({ minStep: 25 }) // Sleep, Low, Medium, High
+      .onGet(() => this.read((s) => toRotationSpeed(speedStep(s)), 0))
       .onSet((v) => this.setSpeed(Number(v)));
 
     this.purifier.getCharacteristic(Characteristic.LockPhysicalControls)
@@ -152,9 +152,13 @@ export class AirmegaAccessory {
       this.nameService(svc, `${this.device.nickname} ${m.label}`);
       svc.getCharacteristic(Characteristic.On)
         .onGet(() => this.read((st) => Boolean(st[m.flag]), false))
-        // Turning a mode off has no inverse command, so fall back to auto.
-        .onSet((v) => this.sendAll(
-          commandsFor.mode(this.state?.isOn ?? false, v ? m.value : Mode.AUTO)));
+        .onSet((v) => this.sendAll(v
+          ? commandsFor.mode(this.state?.isOn ?? false, m.value)
+          // A mode has no "off" command. Leaving Sleep steps up to Low, as the
+          // next rung of the panel's airflow ladder; other modes fall back to auto.
+          : m.key === 'night'
+            ? commandsFor.speed(this.state?.isOn ?? false, toRotationSpeed(2))
+            : commandsFor.mode(this.state?.isOn ?? false, Mode.AUTO)));
       this.modeSwitches.set(m.key, svc);
     }
   }
@@ -295,9 +299,9 @@ export class AirmegaAccessory {
       this.state.nightMode = value === Mode.NIGHT;
       this.state.rapidMode = value === Mode.RAPID;
       this.state.ecoMode = value === Mode.ECO;
-      // Night runs the fan at its quietest; parsePurifierState reports it as step 1.
+      // Coway reports fan 0 while in Sleep.
       if (this.state.nightMode) {
-        this.state.fanSpeed = 1;
+        this.state.fanSpeed = 0;
       }
     }
     // Show the knock-on effects now (a mode moves the slider, a speed leaves auto)
@@ -383,12 +387,16 @@ export class AirmegaAccessory {
     }
   }
 
+  private currentStep(): number {
+    return this.state ? speedStep(this.state) : 0;
+  }
+
   private pushPurifierState(s: PurifierState): void {
     const { Characteristic } = this.platform;
     this.purifier.updateCharacteristic(Characteristic.Active, s.isOn ? 1 : 0);
     this.purifier.updateCharacteristic(Characteristic.CurrentAirPurifierState, s.isOn ? 2 : 0);
     this.purifier.updateCharacteristic(Characteristic.TargetAirPurifierState, s.autoMode ? 1 : 0);
-    this.purifier.updateCharacteristic(Characteristic.RotationSpeed, toRotationSpeed(s.fanSpeed));
+    this.purifier.updateCharacteristic(Characteristic.RotationSpeed, toRotationSpeed(speedStep(s)));
     this.purifier.updateCharacteristic(Characteristic.LockPhysicalControls, s.buttonLock ? 1 : 0);
     for (const m of MODE_SWITCHES) {
       this.modeSwitches.get(m.key)?.updateCharacteristic(Characteristic.On, Boolean(s[m.flag]));

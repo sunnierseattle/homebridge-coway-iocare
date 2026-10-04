@@ -331,7 +331,7 @@ describe('AirmegaAccessory HAP hygiene', () => {
     expect(hapWarnings).toEqual([]);
   });
 
-  it('shows Night mode at the lowest speed as soon as it is selected, not a poll later', async () => {
+  it('shows Night mode at the Sleep step as soon as it is selected, not a poll later', async () => {
     const { airmega, accessory, purifier } = makeAccessory(
       { readState: () => Promise.resolve(state({ fanSpeed: 2 })) }, { exposeModeSwitches: true });
     await airmega.refresh();
@@ -339,6 +339,64 @@ describe('AirmegaAccessory HAP hygiene', () => {
     await accessory.getServiceById(hap.Service.Switch, 'night')!
       .getCharacteristic(hap.Characteristic.On).handleSetRequest(true);
 
-    expect(purifier.getCharacteristic(hap.Characteristic.RotationSpeed).value).toBeCloseTo(100 / 3);
+    expect(purifier.getCharacteristic(hap.Characteristic.RotationSpeed).value).toBe(25);
+  });
+});
+
+describe('AirmegaAccessory four-step speed slider', () => {
+  const speed = (purifier: hap.Service) => purifier.getCharacteristic(hap.Characteristic.RotationSpeed);
+  const sent = (control: ReturnType<typeof vi.fn>) => control.mock.calls.map((c) => [c[1], c[2]]);
+
+  it('snaps the slider to four positions', () => {
+    const { purifier } = makeAccessory();
+    expect(speed(purifier).props.minStep).toBe(25);
+  });
+
+  it('shows Sleep as 25%, distinct from Low at 50%', async () => {
+    const sleeping = makeAccessory({ readState: () => Promise.resolve(state({ nightMode: true, fanSpeed: 0 })) });
+    await sleeping.airmega.refresh();
+    expect(speed(sleeping.purifier).value).toBe(25);
+
+    const low = makeAccessory({ readState: () => Promise.resolve(state({ fanSpeed: 1 })) });
+    await low.airmega.refresh();
+    expect(speed(low.purifier).value).toBe(50);
+  });
+
+  it('enters Sleep when the slider is set to its lowest step', async () => {
+    vi.useFakeTimers();
+    const { airmega, purifier, client } = makeAccessory();
+    await airmega.refresh();
+    client.control.mockClear();
+
+    const write = speed(purifier).handleSetRequest(25);
+    await vi.advanceTimersByTimeAsync(300);
+    await write;
+
+    expect(sent(client.control)).toEqual([['0002', '2']]);
+    vi.useRealTimers();
+  });
+
+  it('keeps Sleep when Manual is chosen while sleeping', async () => {
+    const { airmega, purifier, client } = makeAccessory({
+      readState: () => Promise.resolve(state({ nightMode: true, fanSpeed: 0 })),
+    });
+    await airmega.refresh();
+    client.control.mockClear();
+
+    await purifier.getCharacteristic(hap.Characteristic.TargetAirPurifierState).handleSetRequest(0);
+
+    expect(sent(client.control)).toEqual([['0002', '2']]);
+  });
+
+  it('steps up to Low when the Night switch is turned off', async () => {
+    const { airmega, accessory, client } = makeAccessory(
+      { readState: () => Promise.resolve(state({ nightMode: true, fanSpeed: 0 })) }, { exposeModeSwitches: true });
+    await airmega.refresh();
+    client.control.mockClear();
+
+    await accessory.getServiceById(hap.Service.Switch, 'night')!
+      .getCharacteristic(hap.Characteristic.On).handleSetRequest(false);
+
+    expect(sent(client.control)).toEqual([['0003', '1']]);
   });
 });
