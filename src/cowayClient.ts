@@ -37,6 +37,18 @@ interface ClientDeps {
   sleep: (ms: number) => Promise<void>;
 }
 
+/**
+ * Whether cached supplies still match the status page's filter readings. A
+ * difference beyond rounding means the filter changed (a clean or a reset), so
+ * the cache is stale. An unreported reading is no evidence either way.
+ */
+function agrees(readings: FilterReading[], statusPage: { pre?: number; max2?: number }): boolean {
+  const pre = readings.find((f) => /pre-?filter/i.test(f.name))?.remainPct;
+  const main = readings.find((f) => !/pre-?filter/i.test(f.name))?.remainPct;
+  const close = (a?: number, b?: number) => a === undefined || b === undefined || Math.abs(a - b) <= 1;
+  return close(pre, statusPage.pre) && close(main, statusPage.max2);
+}
+
 /** A hung connection would otherwise stall the poll loop indefinitely. */
 const REQUEST_TIMEOUT_MS = 15_000;
 /** Retries after the first attempt, for server errors and dropped connections. */
@@ -244,7 +256,11 @@ export class CowayClient {
       throw new CowayError(`Coway status page returned ${res.status}.`);
     }
     const payload = extractStatusPayload(await res.text());
-    return parsePurifierState(payload, await this.fetchFilters(device));
+    // The status page's own filter readings (percent used) are fresh every poll;
+    // passing them lets a reset on the unit show without waiting out the cache.
+    const used = (key: string) => (typeof payload.sensor[key] === 'number' ? 100 - payload.sensor[key] : undefined);
+    const hint = { pre: used('0011'), max2: used('0012') };
+    return parsePurifierState(payload, await this.fetchFilters(device, hint));
   }
 
   /**
@@ -252,9 +268,11 @@ export class CowayClient {
    * the 250S's is still unfinished -- so a failure here is not fatal; the caller
    * falls back to the sensor attributes embedded in the status page.
    */
-  async fetchFilters(device: PurifierDevice): Promise<FilterReading[]> {
+  async fetchFilters(
+    device: PurifierDevice, statusPage: { pre?: number; max2?: number } = {},
+  ): Promise<FilterReading[]> {
     const cached = this.supplies.get(device.deviceSerial);
-    if (cached && Date.now() - cached.at < SUPPLIES_TTL_MS) {
+    if (cached && Date.now() - cached.at < SUPPLIES_TTL_MS && agrees(cached.readings, statusPage)) {
       return cached.readings;
     }
     const url = new URL(

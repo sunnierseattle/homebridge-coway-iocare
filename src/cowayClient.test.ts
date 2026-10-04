@@ -197,4 +197,22 @@ describe('CowayClient requests', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
+
+  it('re-reads supplies early when the status page shows the filter has changed, e.g. after a reset', async () => {
+    vi.useFakeTimers();
+    const supplies = (pre: number) => json(200, { data: { suppliesList: [
+      { supplyNm: 'Pre-Filter', filterRemain: pre }, { supplyNm: 'Max2 Filter', filterRemain: 94 }] } });
+    const fetch = vi.fn().mockResolvedValueOnce(supplies(0)).mockResolvedValue(supplies(100));
+    vi.stubGlobal('fetch', fetch);
+    const { client } = makeRequestClient();
+
+    await client.fetchFilters(device, { pre: 0, max2: 94 });
+    await client.fetchFilters(device, { pre: 0, max2: 94 }); // agrees with the cache
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    const after = await client.fetchFilters(device, { pre: 100, max2: 94 }); // pre-filter reset on the unit
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(after[0]).toEqual({ name: 'Pre-Filter', remainPct: 100 });
+    vi.useRealTimers();
+  });
 });
